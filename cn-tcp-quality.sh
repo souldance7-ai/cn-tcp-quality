@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.4.0"
+VERSION="1.5.0"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 COUNT=30
 COUNT_EXPLICIT=0
@@ -194,20 +194,24 @@ install_dependencies() {
   command -v ip >/dev/null 2>&1 || missing+=(ip)
   command -v ss >/dev/null 2>&1 || missing+=(ss)
   command -v timeout >/dev/null 2>&1 || missing+=(timeout)
+  if [ "$RUN_SPEED" -eq 1 ]; then
+    command -v python3 >/dev/null 2>&1 || missing+=(python3)
+    command -v getent >/dev/null 2>&1 || missing+=(getent)
+  fi
   [ "${#missing[@]}" -eq 0 ] && return 0
 
   echo -e "${YELLOW}[!] 缺少依赖：${missing[*]}，正在安装……${NC}"
   if command -v apt-get >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl nmap iproute2 coreutils >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl nmap iproute2 coreutils python3 libc-bin >/dev/null 2>&1
   elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y -q curl nmap iproute coreutils >/dev/null 2>&1
+    dnf install -y -q curl nmap iproute coreutils python3 glibc-common >/dev/null 2>&1
   elif command -v yum >/dev/null 2>&1; then
-    yum install -y -q curl nmap iproute coreutils >/dev/null 2>&1
+    yum install -y -q curl nmap iproute coreutils python3 glibc-common >/dev/null 2>&1
   elif command -v apk >/dev/null 2>&1; then
-    apk add --no-cache curl nmap-nping iproute2 coreutils >/dev/null 2>&1
+    apk add --no-cache curl nmap-nping iproute2 coreutils python3 musl-utils >/dev/null 2>&1
   elif command -v pacman >/dev/null 2>&1; then
-    pacman -Sy --noconfirm curl nmap iproute2 coreutils >/dev/null 2>&1
+    pacman -Sy --noconfirm curl nmap iproute2 coreutils python glibc >/dev/null 2>&1
   else
     echo "无法识别包管理器，请手动安装 curl、nmap/nping、iproute2、coreutils。" >&2
     exit 1
@@ -216,6 +220,11 @@ install_dependencies() {
   for cmd in curl nping ip ss timeout; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "依赖安装失败：$cmd" >&2; exit 1; }
   done
+  if [ "$RUN_SPEED" -eq 1 ]; then
+    for cmd in python3 getent; do
+      command -v "$cmd" >/dev/null 2>&1 || { echo "测速依赖安装失败：$cmd" >&2; exit 1; }
+    done
+  fi
 }
 
 write_builtin_nodes() {
@@ -709,6 +718,226 @@ parse_curl_metric() {
   printf '%s|%s|%s|%s' "$mbps" "$latency" "$retrans" "$status"
 }
 
+speedtest_catalog_file() {
+  case "$1" in
+    北京) printf '%s/catalog-bj.json' "$WORK_DIR" ;;
+    上海) printf '%s/catalog-sh.json' "$WORK_DIR" ;;
+    广东) printf '%s/catalog-gd.json' "$WORK_DIR" ;;
+    安徽) printf '%s/catalog-ah.json' "$WORK_DIR" ;;
+    江苏) printf '%s/catalog-js.json' "$WORK_DIR" ;;
+    *) return 1 ;;
+  esac
+}
+
+ensure_speedtest_catalog() {
+  local prov="$1" location lat lon file url
+  file=$(speedtest_catalog_file "$prov") || return 1
+  if [ -s "$file" ] && python3 - "$file" <<'PY' >/dev/null 2>&1
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+raise SystemExit(0 if isinstance(data, list) and data else 1)
+PY
+  then
+    printf '%s' "$file"
+    return 0
+  fi
+  location=$(speedtest_location "$prov") || return 1
+  lat=${location%%,*}; lon=${location#*,}
+  # 不加 https_functional 过滤：部分营运商双栈端点只公布 HTTP URL，
+  # 过滤后反而会把可用的 IPv6 候选排除。
+  url="https://www.speedtest.net/api/js/servers?engine=js&limit=200&lat=${lat}&lon=${lon}"
+  curl -fsSL --retry 2 --connect-timeout 8 --max-time 30 \
+    -A 'Mozilla/5.0 CN-TCP-Quality/1.5' "$url" -o "$file" 2>/dev/null || return 1
+  python3 - "$file" <<'PY' >/dev/null 2>&1
+import json, sys
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+raise SystemExit(0 if isinstance(data, list) and data else 1)
+PY
+  printf '%s' "$file"
+}
+
+speedtest_http_candidates() {
+  local prov="$1" isp="$2" file
+  file=$(ensure_speedtest_catalog "$prov") || return 1
+  python3 - "$file" "$prov" "$isp" <<'PY'
+import json, math, sys
+from urllib.parse import urlsplit
+
+path, province, isp = sys.argv[1:]
+coords = {
+    "北京": (39.9042, 116.4074), "上海": (31.2304, 121.4737),
+    "广东": (23.1291, 113.2644), "安徽": (31.8206, 117.2272),
+    "江苏": (32.0603, 118.7969),
+}
+aliases = {
+    "电信": ("china telecom", "telecom", "chinanet", "ctgnet", "中国电信", "电信", "189.cn", "ah163"),
+    "联通": ("china unicom", "unicom", "china169", "中国联通", "联通"),
+    "移动": ("china mobile", "cmcc", "中国移动", "移动", "139site", "10086"),
+}
+
+def distance(a, b):
+    r = 6371.0
+    p1, p2 = math.radians(a[0]), math.radians(b[0])
+    dp, dl = math.radians(b[0]-a[0]), math.radians(b[1]-a[1])
+    x = math.sin(dp/2)**2 + math.cos(p1)*math.cos(p2)*math.sin(dl/2)**2
+    return 2*r*math.asin(math.sqrt(x))
+
+try:
+    rows = json.load(open(path, encoding="utf-8"))
+except Exception:
+    raise SystemExit(1)
+
+found = []
+for row in rows if isinstance(rows, list) else []:
+    text = " ".join(str(row.get(k, "")) for k in ("sponsor", "name", "host", "url")).lower()
+    if not any(alias.lower() in text for alias in aliases.get(isp, ())):
+        continue
+    if str(row.get("cc", "CN")).upper() not in ("", "CN"):
+        continue
+    try:
+        d = distance(coords[province], (float(row["lat"]), float(row["lon"])))
+        parts = urlsplit(str(row["url"]))
+        host = parts.hostname
+        if not host:
+            continue
+        port = parts.port or (443 if parts.scheme == "https" else 80)
+        origin = f"{parts.scheme}://{host}:{port}"
+        base = str(row["url"]).rsplit("/", 1)[0]
+    except Exception:
+        continue
+    if d > 450:
+        continue
+    fields = [str(row.get("id", "-")), str(row.get("sponsor", "-")),
+              str(row.get("name", "-")), str(row["url"]), host,
+              str(port), origin, base, f"{d:.1f}"]
+    found.append((d, fields))
+
+for _, fields in sorted(found, key=lambda item: item[0])[:8]:
+    print("\t".join(value.replace("\t", " ").replace("\n", " ") for value in fields))
+PY
+}
+
+resolve_speedtest_host() {
+  local family="$1" host="$2"
+  if [ "$family" = "4" ]; then
+    [[ "$host" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && { printf '%s' "$host"; return; }
+    getent ahostsv4 "$host" 2>/dev/null | awk '$1 !~ /:/&&!seen[$1]++{print $1;exit}'
+  else
+    [[ "$host" == *:* ]] && { printf '%s' "${host#[}" | sed 's/]$//'; return; }
+    getent ahostsv6 "$host" 2>/dev/null | awk '$1 ~ /:/&&!seen[$1]++{print $1;exit}'
+  fi
+}
+
+direct_http_download() {
+  local family="$1" source="$2" host="$3" port="$4" ipaddr="$5" url="$6" work="$7"
+  local meta="$work.download.meta" err="$work.download.err" sslog="$work.download.ss"
+  local resolve_ip="$ipaddr" pid monitor_pid rc=0
+  [ "$family" = "4" ] || resolve_ip="[$ipaddr]"
+  curl "-$family" --interface "$source" --noproxy '*' --http1.1 -k -sS \
+    --connect-timeout 5 --max-time "$SPEED_SECONDS" --resolve "$host:$port:$resolve_ip" \
+    -H 'Cache-Control: no-cache' -o /dev/null \
+    -w '%{http_code}|%{size_download}|%{speed_download}|%{time_connect}|%{time_total}|%{num_connects}' \
+    "$url" > "$meta" 2> "$err" & pid=$!
+  monitor_ss "$pid" "$ipaddr" "$sslog" & monitor_pid=$!
+  wait "$pid" || rc=$?
+  wait "$monitor_pid" 2>/dev/null || true
+  printf '%s|%s|%s' "$rc" "$meta" "$sslog"
+}
+
+direct_http_upload() {
+  local family="$1" source="$2" host="$3" port="$4" ipaddr="$5" url="$6" work="$7"
+  local meta="$work.upload.meta" err="$work.upload.err" sslog="$work.upload.ss"
+  local resolve_ip="$ipaddr" pid monitor_pid rc=0 body_bytes
+  [ "$family" = "4" ] || resolve_ip="[$ipaddr]"
+  body_bytes="$SPEED_BYTES"
+  (
+    # curl 是测速结果的权威进程。测试端提早结束时，数据生成器可能收到
+    # SIGPIPE；这里明确返回 curl 状态，避免把成功上传误判为失败。
+    set +o pipefail
+    {
+      printf 'content1='
+      head -c "$((body_bytes - 9))" /dev/zero 2>/dev/null
+    } | curl "-$family" --interface "$source" --noproxy '*' --http1.1 -k -sS \
+      --connect-timeout 5 --max-time "$SPEED_SECONDS" --resolve "$host:$port:$resolve_ip" \
+      -X POST -H "Content-Length: $body_bytes" -H 'Content-Type: application/x-www-form-urlencoded' -H 'Expect:' \
+      --data-binary @- -o /dev/null \
+      -w '%{http_code}|%{size_upload}|%{speed_upload}|%{time_connect}|%{time_total}|%{num_connects}' \
+      "$url" > "$meta" 2> "$err"
+    exit "${PIPESTATUS[1]}"
+  ) & pid=$!
+  monitor_ss "$pid" "$ipaddr" "$sslog" & monitor_pid=$!
+  wait "$pid" || rc=$?
+  wait "$monitor_pid" 2>/dev/null || true
+  printf '%s|%s|%s' "$rc" "$meta" "$sslog"
+}
+
+parse_direct_http_metric() {
+  local direction="$1" rc="$2" meta_file="$3" ss_file="$4"
+  local http bytes bps connect total connections mbps latency retrans status
+  IFS='|' read -r http bytes bps connect total connections < "$meta_file" 2>/dev/null || true
+  status="OK"
+  [[ "${http:-}" =~ ^(200|201|202|204|206)$ ]] || status="FAIL"
+  [ "$rc" -eq 0 ] || [ "$rc" -eq 28 ] || status="FAIL"
+  [ "${bytes:-0}" -ge 1048576 ] 2>/dev/null || status="FAIL"
+  awk -v n="${bps:-0}" 'BEGIN{exit !(n>=12500)}' || status="FAIL"
+  [ "${connections:-0}" -le 1 ] 2>/dev/null || status="FAIL"
+  if [ "$status" = "OK" ]; then
+    mbps=$(awk -v n="$bps" 'BEGIN{printf "%.1f",n*8/1000000}')
+    latency=$(awk -v n="${connect:-0}" 'BEGIN{printf "%.0f",n*1000}')
+  else
+    mbps="-"; latency="-"
+  fi
+  retrans="-"; [ "$direction" = "upload" ] && retrans=$(retrans_percent_from_ss "$ss_file")
+  printf '%s|%s|%s|%s' "$mbps" "$latency" "$retrans" "$status"
+}
+
+run_direct_http_speed_row() {
+  local family="$1" prov="$2" isp="$3" source
+  local id sponsor city upload_url host port origin base distance ipaddr resolve_seen=0 tested=0
+  local work drc dmeta dss down dlat dummy dstatus urc umeta uss up ulat retrans ustatus
+  local download_url upload_test_url status latency saved_down='' saved_dlat='' saved_engine=''
+  if [ "$family" = "4" ]; then source="$SOURCE_IPV4"; else source="$SOURCE_IPV6"; fi
+  [ -n "$source" ] || { printf '%s' "-|-|-|-|无本地IPv${family}|direct-http"; return; }
+  while IFS=$'\t' read -r id sponsor city upload_url host port origin base distance; do
+    [ -n "$host" ] || continue
+    ipaddr=$(resolve_speedtest_host "$family" "$host" 2>/dev/null || true)
+    [ -n "$ipaddr" ] || continue
+    resolve_seen=$((resolve_seen + 1))
+    work="$WORK_DIR/direct-${family}-${prov}-${isp}-${id}"
+    dstatus="FAIL"
+    for download_url in \
+      "${origin}/download?size=${SPEED_BYTES}&guid=cn-tcp-$RANDOM" \
+      "${base}/random4000x4000.jpg?x=$(date +%s)$RANDOM"; do
+      IFS='|' read -r drc dmeta dss <<<"$(direct_http_download "$family" "$source" "$host" "$port" "$ipaddr" "$download_url" "$work")"
+      IFS='|' read -r down dlat dummy dstatus <<<"$(parse_direct_http_metric download "$drc" "$dmeta" "$dss")"
+      [ "$dstatus" = "OK" ] && break
+    done
+    [ "$dstatus" = "OK" ] || continue
+    tested=$((tested + 1))
+    saved_down="$down"; saved_dlat="$dlat"; saved_engine="OoklaHTTP#${id}:${host}"
+    for upload_test_url in \
+      "$upload_url" \
+      "${origin}/upload?guid=cn-tcp-$RANDOM"; do
+      IFS='|' read -r urc umeta uss <<<"$(direct_http_upload "$family" "$source" "$host" "$port" "$ipaddr" "$upload_test_url" "$work")"
+      IFS='|' read -r up ulat retrans ustatus <<<"$(parse_direct_http_metric upload "$urc" "$umeta" "$uss")"
+      if [ "$ustatus" = "OK" ]; then
+        latency="${ulat}/${dlat}"
+        printf '%s|%s|%s|%s|OK|%s' "$retrans" "$up" "$down" "$latency" "$saved_engine"
+        return
+      fi
+    done
+  done < <(speedtest_http_candidates "$prov" "$isp" 2>/dev/null || true)
+  if [ -n "$saved_down" ]; then
+    printf '%s' "-|-|${saved_down}|${saved_dlat}|仅下载可用|${saved_engine}"
+  elif [ "$resolve_seen" -eq 0 ]; then
+    printf '%s' "-|-|-|-|未发现同省同运营商IPv${family}端点|direct-http"
+  elif [ "$tested" -eq 0 ]; then
+    printf '%s' "-|-|-|-|IPv${family}候选端点拒绝下载|direct-http"
+  else
+    printf '%s' "-|-|-|-|IPv${family}端点测速失败|direct-http"
+  fi
+}
+
 speedtest_server_ids() {
   case "$1|$2" in
     北京\|电信) printf '27377 4751' ;;
@@ -879,6 +1108,10 @@ execute_speedtest_candidate() {
 run_speedtest_row() {
   local family="$1" prov="$2" isp="$3" source ids id location keyword result rc low_speed=0
   local -a args=()
+  [ "$family" = "4" ] || {
+    printf '%s' '-|-|-|-|IPv6不使用Speedtest核心|speedtest'
+    return
+  }
   if [ "$family" = "4" ]; then source="$SOURCE_IPV4"; else source="$SOURCE_IPV6"; fi
   [ -n "$source" ] || {
     printf '%s' "-|-|-|-|无本地IPv${family}|speedtest-go"
@@ -967,7 +1200,7 @@ run_speedtests() {
   discover_speedtest_sources
   total=$(wc -l < "$PLAN_FILE" | tr -d ' ')
   echo -e "${BOLD}${CYAN}五省三网 IPv4／IPv6 单线程测速${NC}"
-  echo -e "${DIM}每个方向仅使用一个 TCP 连接；北上广 IPv4 优先 TOS，其余使用逐运营商测速端点。${NC}"
+  echo -e "${DIM}每个方向仅使用一个 TCP 连接；IPv6 直连候选端点的 AAAA，不使用 Speedtest 测速核心。${NC}"
   echo
   printf '  '; pad_left 6 '协议'; printf '  '; pad_left 12 '地区线路'; printf '  '; pad_left 10 '回程重传'; printf '  '; pad_left 12 '回程速度'; printf '  '; pad_left 12 '去程速度'; printf '  '; pad_left 13 '节点延迟'; printf '  '; pad_left 24 '状态'; printf '\n'
   for family in 4 6; do
@@ -986,7 +1219,13 @@ run_speedtests() {
             IFS='|' read -r retrans up down latency status engine <<< "$result"
             [ "$status" = "OK" ] || result=""
           fi
-          [ -n "$result" ] || result=$(run_speedtest_row "$family" "$prov" "$isp")
+          if [ -z "$result" ]; then
+            result=$(run_direct_http_speed_row "$family" "$prov" "$isp")
+            IFS='|' read -r retrans up down latency status engine <<< "$result"
+            if [ "$status" != "OK" ] && [ "$status" != "仅下载可用" ] && [ "$family" = "4" ]; then
+              result=$(run_speedtest_row "$family" "$prov" "$isp")
+            fi
+          fi
           IFS='|' read -r retrans up down latency status engine <<< "$result"
         fi
         clear_progress
