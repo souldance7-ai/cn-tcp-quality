@@ -29,9 +29,21 @@ MOCK_IPV6_NEEDS_L2=1 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 [ "$(grep -c '^IPv6,.*,正常,' "$TEST_TMP/ipv6-l2/tcp-quality.csv")" -eq 3 ]
 [ "$(awk -F, 'NR>1 && $12=="正常"{n++}END{print n+0}' "$TEST_TMP/ipv6-l2/tcp-quality.csv")" -eq 6 ]
 
+mkdir -p "$TEST_TMP/drop-once"
+MOCK_DROP_ONCE_DIR="$TEST_TMP/drop-once" \
+CN_TCP_BANNER=always CN_TCP_BANNER_PAUSE=0 \
+PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
+  --province ah -4 --no-color --output "$TEST_TMP/adaptive" > "$TEST_TMP/adaptive-terminal.txt"
+
+[ "$(awk -F, 'NR>1 && $11==60{n++}END{print n+0}' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
+[ "$(grep -c ',1.67,' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
+grep -q 'CN TCP.*Network Quality Benchmark (V1.4.0)' "$TEST_TMP/adaptive-terminal.txt"
+grep -q '██████╗.*███╗.*██╗' "$TEST_TMP/adaptive-terminal.txt"
+
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
 CN_TCP_SPEEDTEST_SOURCE6="2001:db8::10" \
+MOCK_SPEEDTEST_ARGS_FILE="$TEST_TMP/speedtest-args.txt" \
 CN_TCP_PROGRESS=always \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
   --province bj --quick --speed --no-color --output "$TEST_TMP/speed-dual" > "$TEST_TMP/speed-terminal.txt"
@@ -41,6 +53,10 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 [ "$(grep -c '^IPv4,' "$TEST_TMP/speed-dual/single-thread-speed.csv")" -eq 3 ]
 [ "$(grep -c '^IPv6,' "$TEST_TMP/speed-dual/single-thread-speed.csv")" -eq 3 ]
 grep -q '单线程测速.*100%  6/6.*全部完成' "$TEST_TMP/speed-terminal.txt"
+grep -q -- '--location=39.9042,116.4074' "$TEST_TMP/speedtest-args.txt"
+grep -q -- '--search=China Telecom' "$TEST_TMP/speedtest-args.txt"
+grep -q -- '--filter-cc=CN' "$TEST_TMP/speedtest-args.txt"
+grep -q 'speedtest.net#mock(dynamic/go)' "$TEST_TMP/speed-dual/single-thread-speed.csv"
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
@@ -59,4 +75,21 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(grep -c ',50.0,100.0,42,OK,' "$TEST_TMP/speed-cli/single-thread-speed.csv")" -eq 3 ]
 
-echo "TEST PASS: syntax, node matrix, IPv6 L2 fallback, fixed output fields, dual speed engines, and 30-row speed matrix."
+CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
+CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
+MOCK_SPEEDTEST_LOW=1 \
+PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
+  --province ah -4 --quick --speed --no-color --output "$TEST_TMP/speed-low" >/dev/null
+
+[ "$(grep -c ',测速低于0.1Mbps,' "$TEST_TMP/speed-low/single-thread-speed.csv")" -eq 3 ]
+[ "$(grep -c ',OK,' "$TEST_TMP/speed-low/single-thread-speed.csv" || true)" -eq 0 ]
+
+CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
+CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
+MOCK_DYNAMIC_FAIL=1 \
+PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
+  --province ah -4 --quick --speed --no-color --output "$TEST_TMP/speed-static-fallback" >/dev/null
+
+[ "$(grep -c ',OK,.*(static/go)$' "$TEST_TMP/speed-static-fallback/single-thread-speed.csv")" -eq 3 ]
+
+echo "TEST PASS: syntax, banner, adaptive loss sampling, IPv6 L2 fallback, dynamic dual-stack selection, static fallback, low-speed guard, and 30-row matrix."
