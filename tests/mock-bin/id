@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+if [ "${1:-}" = "-u" ]; then
+  printf '0\n'
+else
+  /usr/bin/id "$@"
+fi
