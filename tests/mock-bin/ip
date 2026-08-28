@@ -2,4 +2,14 @@
 if [ "${MOCK_NO_IPV6:-0}" = "1" ] && [ "${1:-}" = "-6" ]; then
   exit 1
 fi
+
+if [ "${1:-}" = "-6" ] && [ "${2:-}" = "route" ] && [ "${3:-}" = "get" ]; then
+  printf '%s via fe80::1 dev eth0 src 2001:4860:4860::8888 metric 1024\n' "${4:-2001:4860:4860::8844}"
+elif [ "${1:-}" = "-6" ] && [ "${2:-}" = "neigh" ]; then
+  printf 'fe80::1 dev eth0 lladdr 02:00:00:00:00:02 router REACHABLE\n'
+elif [ "${1:-}" = "-6" ] && [ "${2:-}" = "addr" ]; then
+  printf '    inet6 2001:4860:4860::8888/64 scope global\n'
+elif [ "${1:-}" = "link" ] && [ "${2:-}" = "show" ]; then
+  printf '    link/ether 02:00:00:00:00:01 brd ff:ff:ff:ff:ff:ff\n'
+fi
 exit 0
