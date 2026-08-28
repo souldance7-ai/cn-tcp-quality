@@ -11,15 +11,16 @@
 - 标准模式每节点 30 个独立样本；检测到部分丢包时自动补测至 60 个样本，丢包率精度由 3.33% 提升至 1.67%
 - 本机无 IPv6 默认路由时自动跳过 IPv6，不使用 IPv4 结果代替
 - 五省三网 IPv4／IPv6 共 30 组单线程上下行测速尝试
-- 北京／上海／广东 IPv4 优先使用真实 TOS 端点；其余组合从 Ookla 当前服务器目录选择同省、同运营商候选
+- 北京／上海／广东 IPv4 优先使用真实 TOS 端点；其余组合同时从 Ookla 当前目录与每日更新的 Speedtest.cn 国内目录选择同省、同运营商候选
 - IPv6 不调用 Speedtest 测速核心：先验证候选域名 AAAA，再用 `curl -6` 直连端点的下载与上传接口
-- 直连测速依次兼容新版 `/download`、`/upload` 和传统 `random*.jpg`、`upload.php` 协议，并逐个轮询最多 8 个候选
+- 直连测速优先原样使用目录公布的 `downloadUrl`／`uploadUrl`，再兼容新版 `/download`、`/upload` 和传统 `random*.jpg`、`upload.php` 协议
+- 每一条候选端点的地址族解析、下载及上传结果另存 `endpoint-audit.csv`，可直接定位“目录没有端点”“没有 AAAA”或“端点拒绝传输”
 - TOS 主端点失败时自动轮询同省同运营商备用 IP，再回退直连 HTTP；仅 IPv4 最后使用 Speedtest 双引擎兜底
 - TCP 探测和单线程测速均显示动态渐层进度条、百分比、完成数／总数及当前线路
 - 运行后先显示内建金色 `CN TCP` 开场画面，再进入节点获取和测试，不依赖额外字体工具
 - 每个 TCP 样本独立随机来源端口与 sequence；IPv6 普通发包失败时自动尝试网卡／来源地址／下一跳 MAC 二层回退
 
-测速脚本会为 30 个组合逐项发起测试，并绑定本机对应的 IPv4 或 IPv6 源地址。动态测速使用省会坐标和 `China Telecom`、`China Unicom`、`China Mobile` 关键词选取附近的对应运营商节点；IPv6 全程强制解析和连接 AAAA 地址，不依赖 Speedtest 核心是否支持 IPv6。若候选端点离线、没有对应地址族或只开放单向传输，会在该行明确显示原因，不用 IPv4 冒充 IPv6，也不生成假 Mbps。任一方向低于 0.1 Mbps 时不会误标为 `OK`。
+测速脚本会为 30 个组合逐项发起测试，并绑定本机对应的 IPv4 或 IPv6 源地址。动态测速使用省会坐标和运营商关键词筛选 Ookla 目录，同时读取 Speedtest.cn 国内目录中明确标注的省份、运营商、下载及上传网址；IPv6 全程强制解析和连接 AAAA 地址，不依赖 Speedtest 核心是否支持 IPv6。若候选端点离线、没有对应地址族或只开放单向传输，会在该行明确显示原因，不用 IPv4 冒充 IPv6，也不生成假 Mbps。任一方向低于 0.1 Mbps 时不会误标为 `OK`。
 
 ## 一键运行
 
@@ -72,6 +73,7 @@ bash cn-tcp-quality.sh --speed --count 30
 
 - `tcp-quality.csv`：五省三网双栈 TCP 指标
 - `single-thread-speed.csv`：五省三网双栈单线程吞吐指标，使用 `--speed` 时生成
+- `endpoint-audit.csv`：所有直连候选的目录来源、端点 ID、解析地址和失败阶段，使用 `--speed` 时生成
 - `README.txt`：本次测试摘要
 
 CSV 使用 UTF-8 BOM，可直接用 Excel 打开。
@@ -107,7 +109,7 @@ TCP 探测     [###############---------------]  50%  15/30  当前：IPv4 江�
 
 ## 节点来源与第三方说明
 
-脚本优先读取 TcpQuality 对外提供的动态 TCP 探测节点接口，并带有 2026-08-28 的五省三网回退快照。单线程测速使用 Ookla 当前服务器目录寻找运营商端点，并以本机 `curl` 直接完成双栈单连接传输；IPv4 在直连失败时才回退 showwin/speedtest-go（MIT）及 sivel/speedtest-cli（Apache-2.0）。第三方测速核心下载后会校验官方 SHA-256。节点域名、IP、Zstatic CDN、火山引擎 TOS 与第三方测速服务均属于各自权利人，不包含在本项目 MIT 授权范围内，也不代表相关服务方为本项目背书。
+脚本优先读取 TcpQuality 对外提供的动态 TCP 探测节点接口，并带有 2026-08-28 的五省三网回退快照。单线程测速同时读取 Ookla 当前服务器目录，以及 spiritLHLS/speedtest.cn-CN-ID 每日更新的国内公开目录，并以本机 `curl` 直接完成双栈单连接传输；IPv4 在直连失败时才回退 showwin/speedtest-go（MIT）及 sivel/speedtest-cli（Apache-2.0）。第三方测速核心下载后会校验官方 SHA-256。节点域名、IP、Zstatic CDN、火山引擎 TOS 与第三方测速服务均属于各自权利人，不包含在本项目 MIT 授权范围内，也不代表相关服务方为本项目背书。
 
 本项目不上传测试报告、不采集公网 IP、不参与排行榜。
 
