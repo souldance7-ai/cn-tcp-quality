@@ -22,10 +22,24 @@ MOCK_NO_IPV6=1 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 [ "$(grep -c '^IPv6,.*,跳过,' "$TEST_TMP/no-ipv6/tcp-quality.csv")" -eq 15 ]
 [ "$(grep -c '^IPv4,.*,正常,' "$TEST_TMP/no-ipv6/tcp-quality.csv")" -eq 15 ]
 
+CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
+CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
+CN_TCP_SPEEDTEST_SOURCE6="2001:db8::10" \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
-  --province bj --quick --speed --no-color --output "$TEST_TMP/speed-failure" >/dev/null
+  --province bj --quick --speed --no-color --output "$TEST_TMP/speed-dual" >/dev/null
 
-[ "$(wc -l < "$TEST_TMP/speed-failure/single-thread-speed.csv")" -eq 4 ]
-[ "$(grep -c ',部分失败,' "$TEST_TMP/speed-failure/single-thread-speed.csv")" -eq 3 ]
+[ "$(wc -l < "$TEST_TMP/speed-dual/single-thread-speed.csv")" -eq 7 ]
+[ "$(grep -c ',OK,' "$TEST_TMP/speed-dual/single-thread-speed.csv")" -eq 6 ]
+[ "$(grep -c '^IPv4,' "$TEST_TMP/speed-dual/single-thread-speed.csv")" -eq 3 ]
+[ "$(grep -c '^IPv6,' "$TEST_TMP/speed-dual/single-thread-speed.csv")" -eq 3 ]
 
-echo "TEST PASS: syntax, node matrix, dual-stack metrics, IPv6 auto-skip, speed failure handling."
+CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
+CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
+CN_TCP_SPEEDTEST_SOURCE6="2001:db8::10" \
+PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
+  --quick --speed --no-color --output "$TEST_TMP/speed-full" >/dev/null
+
+[ "$(wc -l < "$TEST_TMP/speed-full/single-thread-speed.csv")" -eq 31 ]
+[ "$(grep -c ',OK,' "$TEST_TMP/speed-full/single-thread-speed.csv")" -eq 30 ]
+
+echo "TEST PASS: syntax, node matrix, dual-stack metrics, IPv6 auto-skip, and 30-row single-thread speed matrix."
