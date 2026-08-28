@@ -6,17 +6,19 @@
 
 set -uo pipefail
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 COUNT=10
 PARALLEL=6
-DELAY_SECONDS=1
 RUN_SPEED=0
 SPEED_EXECUTED=0
 SPEED_SECONDS=8
 SPEED_BYTES=$((256 * 1024 * 1024))
 SPEEDTEST_GO_VERSION="${CN_TCP_SPEEDTEST_GO_VERSION:-1.8.2}"
 SPEEDTEST_BIN="${CN_TCP_SPEEDTEST_BIN:-}"
+SPEEDTEST_ENGINE="${CN_TCP_SPEEDTEST_ENGINE:-go}"
+SPEEDTEST_INSTALL_TRIED=0
+SPEEDTEST_INSTALL_ERROR=""
 SOURCE_IPV4="${CN_TCP_SPEEDTEST_SOURCE4:-}"
 SOURCE_IPV6="${CN_TCP_SPEEDTEST_SOURCE6:-}"
 PROGRESS_MODE="${CN_TCP_PROGRESS:-auto}"
@@ -278,10 +280,11 @@ ipv6_route_available() {
 }
 
 calc_metrics() {
-  local values="$1" count="$2" received="${3:-}" avg jitter min max p95 loss sorted idx
+  local values="$1" count="$2" received="${3:-}" samples avg jitter min max p95 loss sorted idx
   [ -n "$received" ] || received=$(wc -l < "$values" | tr -d ' ')
+  samples=$(wc -l < "$values" | tr -d ' ')
   loss=$(awk -v sent="$count" -v recv="$received" 'BEGIN{printf "%.2f", (sent-recv)*100/sent}')
-  if [ "$received" -eq 0 ]; then
+  if [ "$samples" -eq 0 ]; then
     printf '%s\t-\t-\t-\t-\t-\t0' "$loss"
     return
   fi
@@ -290,9 +293,10 @@ calc_metrics() {
   min=$(awk 'NR==1{m=$1}$1<m{m=$1}END{printf "%.2f",m}' "$values")
   max=$(awk 'NR==1{m=$1}$1>m{m=$1}END{printf "%.2f",m}' "$values")
   sorted="${values}.sorted"; sort -n "$values" > "$sorted"
-  idx=$(( (received * 95 + 99) / 100 ))
+  idx=$(( (samples * 95 + 99) / 100 ))
   p95=$(awk -v n="$idx" 'NR==n{printf "%.2f",$1;exit}' "$sorted")
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' "$loss" "$avg" "$jitter" "$p95" "$min" "$max" "$received"
+  [ -n "$p95" ] || p95='-'
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s' "$loss" "$avg" "$jitter" "$p95" "$min" "$max" "$samples"
 }
 
 write_skip_result() {
@@ -301,10 +305,68 @@ write_skip_result() {
     "$family" "$prov" "$isp" "$reason" "$host" "$ipaddr" "$COUNT" > "$RESULT_DIR/$idx.tsv"
 }
 
+nping_random_source_port() {
+  printf '%s' $((20000 + RANDOM % 40000))
+}
+
+nping_random_sequence() {
+  printf '%s' $((((RANDOM << 16) ^ RANDOM) & 0x7ffffffe))
+}
+
+nping_rtt_from_file() {
+  local file="$1" rtt sent_time received_time
+  rtt=$(grep -oE 'rtt[=:][[:space:]]*[0-9]+([.][0-9]+)?ms' "$file" 2>/dev/null |
+    sed -nE 's/.*[=:][[:space:]]*([0-9.]+)ms/\1/p' | head -1)
+  if [[ "$rtt" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    printf '%s' "$rtt"
+    return 0
+  fi
+  sent_time=$(sed -nE 's/^SENT \(([0-9.]+)s\).*/\1/p' "$file" | head -1)
+  received_time=$(sed -nE 's/^RCVD \(([0-9.]+)s\).*/\1/p' "$file" | head -1)
+  if [[ "$sent_time" =~ ^[0-9]+([.][0-9]+)?$ ]] &&
+     [[ "$received_time" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    awk -v s="$sent_time" -v r="$received_time" 'BEGIN{
+      value=(r-s)*1000; if(value>=0){printf "%.3f",value; exit 0} exit 1
+    }'
+    return
+  fi
+  return 1
+}
+
+get_ipv6_l2_route() {
+  local target="$1" route_info iface source_ip next_hop source_mac dest_mac
+  route_info=$(ip -6 route get "$target" 2>/dev/null | head -1)
+  iface=$(printf '%s\n' "$route_info" | awk '{for(i=1;i<=NF;i++)if($i=="dev"){print $(i+1);exit}}')
+  source_ip=$(printf '%s\n' "$route_info" | awk '{for(i=1;i<=NF;i++)if($i=="src"){print $(i+1);exit}}')
+  next_hop=$(printf '%s\n' "$route_info" | awk '{for(i=1;i<=NF;i++)if($i=="via"){print $(i+1);exit}}')
+  [ -n "$iface" ] || return 1
+  if [ -z "$source_ip" ]; then
+    source_ip=$(ip -6 addr show dev "$iface" scope global 2>/dev/null |
+      awk '/inet6 /{sub(/\/.*/,"",$2);print $2;exit}')
+  fi
+  next_hop=${next_hop:-$target}
+  source_mac=$(ip link show dev "$iface" 2>/dev/null | awk '/link\/ether/{print $2;exit}')
+  dest_mac=$(ip -6 neigh show "$next_hop" dev "$iface" 2>/dev/null |
+    awk '/lladdr/{for(i=1;i<=NF;i++)if($i=="lladdr"){print $(i+1);exit}}')
+  if [ -z "$dest_mac" ] && command -v ping >/dev/null 2>&1; then
+    ping -6 -c 1 -W 1 -I "$iface" "$next_hop" >/dev/null 2>&1 || true
+    dest_mac=$(ip -6 neigh show "$next_hop" dev "$iface" 2>/dev/null |
+      awk '/lladdr/{for(i=1;i<=NF;i++)if($i=="lladdr"){print $(i+1);exit}}')
+  fi
+  source_ip=${source_ip%%\%*}
+  [[ "$source_ip" == *:* ]] || return 1
+  [[ "$source_mac" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]] || return 1
+  [[ "$dest_mac" =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]] || return 1
+  printf '%s|%s|%s|%s' "$iface" "$source_ip" "$source_mac" "$dest_mac"
+}
+
 probe_node() {
   local idx="$1" family="$2" prov="$3" isp="$4" host="$5" ipaddr="$6" port="$7"
-  local raw="$WORK_DIR/nping.$idx.log" values="$WORK_DIR/rtt.$idx" metrics status rc=0 sent received loss
-  : > "$values"
+  local raw="$WORK_DIR/nping.$idx.log" values="$WORK_DIR/rtt.$idx" metrics status sent received loss
+  local i attempt max_attempts packet_log one_received one_rtt source_port sequence rc timeouts=0
+  local l2_route iface source_ip source_mac dest_mac l2_ready=0 l2_preferred=0 use_l2
+  local -a args
+  : > "$values"; : > "$raw"
   if [ "$ipaddr" = "-" ]; then
     write_skip_result "$idx" "$family" "$prov" "$isp" "$host" "$ipaddr" "无节点"
     return
@@ -313,19 +375,47 @@ probe_node() {
     write_skip_result "$idx" "$family" "$prov" "$isp" "$host" "$ipaddr" "跳过"
     return
   fi
-  if [ "$family" = "6" ]; then
-    timeout "$((COUNT * 2 + 15))" nping -6 --tcp --flags syn -p "$port" -c "$COUNT" --delay "${DELAY_SECONDS}s" "$ipaddr" > "$raw" 2>&1 || rc=$?
-  else
-    timeout "$((COUNT * 2 + 15))" nping --tcp --flags syn -p "$port" -c "$COUNT" --delay "${DELAY_SECONDS}s" "$ipaddr" > "$raw" 2>&1 || rc=$?
-  fi
-  grep -oE 'rtt[=:][[:space:]]*[0-9]+([.][0-9]+)?ms' "$raw" 2>/dev/null | sed -E 's/.*[=:][[:space:]]*([0-9.]+)ms/\1/' > "$values" || true
-  sent=$(sed -nE 's/.*Raw packets sent:[[:space:]]*([0-9]+).*/\1/p' "$raw" | tail -1)
-  received=$(sed -nE 's/.*Rcvd:[[:space:]]*([0-9]+).*/\1/p' "$raw" | tail -1)
-  [[ "$sent" =~ ^[0-9]+$ ]] || sent="$COUNT"
-  [[ "$received" =~ ^[0-9]+$ ]] || received=$(wc -l < "$values" | tr -d ' ')
-  if [ "$received" -gt 0 ] && [ ! -s "$values" ]; then
-    sed -nE 's/.*Avg rtt:[[:space:]]*([0-9.]+).*/\1/p' "$raw" | tail -1 > "$values"
-  fi
+  sent="$COUNT"; received=0
+  for ((i=1; i<=COUNT; i++)); do
+    max_attempts=1
+    [ "$family" = "6" ] && [ "$l2_preferred" -eq 0 ] && max_attempts=2
+    for ((attempt=1; attempt<=max_attempts; attempt++)); do
+      use_l2=0
+      if [ "$family" = "6" ] && { [ "$l2_preferred" -eq 1 ] || [ "$attempt" -eq 2 ]; }; then
+        if [ "$l2_ready" -eq 0 ]; then
+          l2_route=$(get_ipv6_l2_route "$ipaddr" 2>/dev/null || true)
+          if [ -n "$l2_route" ]; then
+            IFS='|' read -r iface source_ip source_mac dest_mac <<< "$l2_route"
+            l2_ready=1
+          fi
+        fi
+        [ "$l2_ready" -eq 1 ] || break
+        use_l2=1
+      fi
+      source_port=$(nping_random_source_port)
+      sequence=$(nping_random_sequence)
+      args=(--tcp --flags syn -p "$port" -g "$source_port" --seq "$sequence" -c 1)
+      [ "$family" = "6" ] && args=(-6 "${args[@]}")
+      if [ "$use_l2" -eq 1 ]; then
+        args=(-6 -e "$iface" -S "$source_ip" --source-mac "$source_mac" --dest-mac "$dest_mac" --tcp --flags syn -p "$port" -g "$source_port" --seq "$sequence" -c 1)
+      fi
+      packet_log="$WORK_DIR/nping.${idx}.${i}.${attempt}.log"
+      rc=0
+      timeout 6 nping "${args[@]}" "$ipaddr" > "$packet_log" 2>&1 || rc=$?
+      printf '\n===== packet %s attempt %s l2=%s rc=%s =====\n' "$i" "$attempt" "$use_l2" "$rc" >> "$raw"
+      cat "$packet_log" >> "$raw"
+      [ "$rc" -eq 124 ] && timeouts=$((timeouts + 1))
+      one_received=$(sed -nE 's/.*Rcvd:[[:space:]]*([0-9]+).*/\1/p' "$packet_log" | tail -1)
+      one_rtt=$(nping_rtt_from_file "$packet_log" 2>/dev/null || true)
+      if [[ "$one_received" =~ ^[0-9]+$ ]] && [ "$one_received" -gt 0 ] &&
+         [[ "$one_rtt" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        printf '%s\n' "$one_rtt" >> "$values"
+        received=$((received + 1))
+        [ "$use_l2" -eq 0 ] || l2_preferred=1
+        break
+      fi
+    done
+  done
   metrics=$(calc_metrics "$values" "$sent" "$received")
   loss=${metrics%%$'\t'*}
   status="正常"
@@ -336,7 +426,7 @@ probe_node() {
       awk -v v="$loss" 'BEGIN{exit !(v>3)}' && status="丢包"
     fi
   fi
-  [ "$rc" -eq 124 ] && status="超时"
+  [ "$received" -eq 0 ] && [ "$timeouts" -gt 0 ] && status="超时"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
     "$family" "$prov" "$isp" "$metrics" "$status" "$host" "$ipaddr" "$sent" > "$RESULT_DIR/$idx.tsv"
 }
@@ -593,9 +683,16 @@ discover_speedtest_sources() {
 }
 
 install_speedtest_engine() {
-  local machine arch asset base archive checksums expected actual extracted
+  local machine arch asset base archive checksums expected actual extracted fallback
   if [ -n "$SPEEDTEST_BIN" ] && [ -x "$SPEEDTEST_BIN" ]; then return 0; fi
-  if command -v speedtest-go >/dev/null 2>&1; then SPEEDTEST_BIN=$(command -v speedtest-go); return 0; fi
+  if command -v speedtest-go >/dev/null 2>&1; then
+    SPEEDTEST_BIN=$(command -v speedtest-go); SPEEDTEST_ENGINE=go; return 0
+  fi
+  if command -v speedtest-cli >/dev/null 2>&1; then
+    SPEEDTEST_BIN=$(command -v speedtest-cli); SPEEDTEST_ENGINE=cli; return 0
+  fi
+  [ "$SPEEDTEST_INSTALL_TRIED" -eq 0 ] || return 1
+  SPEEDTEST_INSTALL_TRIED=1
   machine=$(uname -m)
   case "$machine" in
     x86_64|amd64) arch="x86_64" ;;
@@ -603,25 +700,42 @@ install_speedtest_engine() {
     armv7|armv7l) arch="armv7" ;;
     i386|i486|i586|i686) arch="i386" ;;
     s390x|riscv64|ppc64|ppc64le|loong64) arch="$machine" ;;
-    *) return 1 ;;
+    *) arch="" ;;
   esac
-  command -v tar >/dev/null 2>&1 || return 1
-  command -v sha256sum >/dev/null 2>&1 || return 1
-  asset="speedtest-go_${SPEEDTEST_GO_VERSION}_Linux_${arch}.tar.gz"
-  base="https://github.com/showwin/speedtest-go/releases/download/v${SPEEDTEST_GO_VERSION}"
-  archive="$WORK_DIR/$asset"; checksums="$WORK_DIR/speedtest-go-checksums.txt"
-  curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 "$base/$asset" -o "$archive" || return 1
-  curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "$base/checksums.txt" -o "$checksums" || return 1
-  expected=$(awk -v f="$asset" '$2==f{print $1;exit}' "$checksums")
-  [ -n "$expected" ] || return 1
-  actual=$(sha256sum "$archive" | awk '{print $1}')
-  [ "$actual" = "$expected" ] || return 1
-  mkdir -p "$WORK_DIR/speedtest-go"
-  tar -xzf "$archive" -C "$WORK_DIR/speedtest-go" || return 1
-  extracted=$(find "$WORK_DIR/speedtest-go" -maxdepth 2 -type f -name speedtest -print | head -1)
-  [ -n "$extracted" ] || return 1
-  chmod +x "$extracted"
-  SPEEDTEST_BIN="$extracted"
+  if [ -n "$arch" ] && command -v tar >/dev/null 2>&1 && command -v sha256sum >/dev/null 2>&1; then
+    asset="speedtest-go_${SPEEDTEST_GO_VERSION}_Linux_${arch}.tar.gz"
+    base="https://github.com/showwin/speedtest-go/releases/download/v${SPEEDTEST_GO_VERSION}"
+    archive="$WORK_DIR/$asset"; checksums="$WORK_DIR/speedtest-go-checksums.txt"
+    if curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 "$base/$asset" -o "$archive" &&
+       curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "$base/checksums.txt" -o "$checksums"; then
+      expected=$(awk -v f="$asset" '{name=$2;sub(/^\*/,"",name);if(name==f){print $1;exit}}' "$checksums")
+      actual=$(sha256sum "$archive" | awk '{print $1}')
+      if [ -n "$expected" ] && [ "$actual" = "$expected" ]; then
+        mkdir -p "$WORK_DIR/speedtest-go"
+        if tar -xzf "$archive" -C "$WORK_DIR/speedtest-go"; then
+          extracted=$(find "$WORK_DIR/speedtest-go" -maxdepth 3 -type f \
+            \( -name speedtest -o -name speedtest-go \) -print | head -1)
+          if [ -n "$extracted" ]; then
+            chmod +x "$extracted"
+            SPEEDTEST_BIN="$extracted"; SPEEDTEST_ENGINE=go
+            return 0
+          fi
+        fi
+      fi
+    fi
+  fi
+
+  fallback="$WORK_DIR/speedtest-cli.py"
+  if command -v python3 >/dev/null 2>&1 &&
+     curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 \
+       "https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py" -o "$fallback" &&
+     grep -q 'Speedtest' "$fallback"; then
+    chmod +x "$fallback"
+    SPEEDTEST_BIN="$fallback"; SPEEDTEST_ENGINE=cli
+    return 0
+  fi
+  SPEEDTEST_INSTALL_ERROR="speedtest-go 与 speedtest-cli 均无法安装"
+  return 1
 }
 
 monitor_speedtest_pid() {
@@ -638,36 +752,54 @@ monitor_speedtest_pid() {
 
 json_number() {
   local key="$1" file="$2"
-  grep -oE "\"${key}\":[-+0-9.eE]+" "$file" 2>/dev/null | head -1 | cut -d: -f2
+  grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*[-+0-9.eE]+" "$file" 2>/dev/null |
+    head -1 | sed -E 's/.*:[[:space:]]*//'
 }
 
-run_speedtest_go_row() {
+run_speedtest_row() {
   local family="$1" prov="$2" isp="$3" source ids id json sslog pid monitor_pid rc dl up latency retrans args=()
   if [ "$family" = "4" ]; then source="$SOURCE_IPV4"; else source="$SOURCE_IPV6"; fi
   [ -n "$source" ] || {
     printf '%s' "-|-|-|-|无本地IPv${family}|speedtest-go"
     return
   }
-  install_speedtest_engine || { printf '%s' '-|-|-|-|测速核心安装失败|speedtest-go'; return; }
+  install_speedtest_engine || {
+    printf '%s' "-|-|-|-|${SPEEDTEST_INSTALL_ERROR:-测速核心安装失败}|speedtest"
+    return
+  }
   ids=$(speedtest_server_ids "$prov" "$isp" 2>/dev/null || true)
   [ -n "$ids" ] || { printf '%s' '-|-|-|-|无候选端点|speedtest-go'; return; }
   [ "$QUICK" -eq 0 ] || args+=(--saving-mode)
   for id in $ids; do
     json="$WORK_DIR/speedtest-${family}-${prov}-${isp}-${id}.json"
     sslog="$WORK_DIR/speedtest-${family}-${prov}-${isp}-${id}.ss"
-    timeout 90 "$SPEEDTEST_BIN" --server="$id" --source="$source" --thread=1 --json "${args[@]}" > "$json" 2>/dev/null & pid=$!
+    if [ "$SPEEDTEST_ENGINE" = "cli" ]; then
+      timeout 120 python3 "$SPEEDTEST_BIN" --server "$id" --source "$source" --single --secure --json > "$json" 2>/dev/null & pid=$!
+    else
+      timeout 120 "$SPEEDTEST_BIN" --server="$id" --source="$source" --thread=1 --json "${args[@]}" > "$json" 2>/dev/null & pid=$!
+    fi
     monitor_speedtest_pid "$pid" "$sslog" & monitor_pid=$!
     wait "$pid"; rc=$?
     wait "$monitor_pid" 2>/dev/null || true
     [ "$rc" -eq 0 ] || continue
-    dl=$(json_number dl_speed "$json"); up=$(json_number ul_speed "$json"); latency=$(json_number latency "$json")
+    if [ "$SPEEDTEST_ENGINE" = "cli" ]; then
+      dl=$(json_number download "$json"); up=$(json_number upload "$json"); latency=$(json_number ping "$json")
+    else
+      dl=$(json_number dl_speed "$json"); up=$(json_number ul_speed "$json"); latency=$(json_number latency "$json")
+    fi
     if [[ "$dl" =~ ^[-+0-9.eE]+$ ]] && [[ "$up" =~ ^[-+0-9.eE]+$ ]] &&
        awk -v d="$dl" -v u="$up" 'BEGIN{exit !(d>0&&u>0)}'; then
-      dl=$(awk -v n="$dl" 'BEGIN{printf "%.1f",n*8/1000000}')
-      up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n*8/1000000}')
-      if [[ "$latency" =~ ^[-+0-9.eE]+$ ]]; then latency=$(awk -v n="$latency" 'BEGIN{printf "%.0f",n/1000000}'); else latency="-"; fi
+      if [ "$SPEEDTEST_ENGINE" = "cli" ]; then
+        dl=$(awk -v n="$dl" 'BEGIN{printf "%.1f",n/1000000}')
+        up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n/1000000}')
+        if [[ "$latency" =~ ^[-+0-9.eE]+$ ]]; then latency=$(awk -v n="$latency" 'BEGIN{printf "%.0f",n}'); else latency="-"; fi
+      else
+        dl=$(awk -v n="$dl" 'BEGIN{printf "%.1f",n*8/1000000}')
+        up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n*8/1000000}')
+        if [[ "$latency" =~ ^[-+0-9.eE]+$ ]]; then latency=$(awk -v n="$latency" 'BEGIN{printf "%.0f",n/1000000}'); else latency="-"; fi
+      fi
       retrans=$(retrans_percent_from_ss "$sslog")
-      printf '%s|%s|%s|%s|OK|speedtest.net#%s' "$retrans" "$up" "$dl" "$latency" "$id"
+      printf '%s|%s|%s|%s|OK|speedtest.net#%s(%s)' "$retrans" "$up" "$dl" "$latency" "$id" "$SPEEDTEST_ENGINE"
       return
     fi
   done
@@ -675,22 +807,27 @@ run_speedtest_go_row() {
 }
 
 run_tos_speed_row() {
-  local prov="$1" isp="$2" line ipaddr region bucket work urc umeta uss drc dmeta dss
+  local prov="$1" isp="$2" type family node_prov node_isp host ipaddr port target
+  local region bucket work urc umeta uss drc dmeta dss candidate=0
   local up ulat retrans ustatus down dlat dummy dstatus latency
-  line=$(awk -F '\t' -v p="$prov" -v i="$isp" '$1=="tos"&&$2=="4"&&$3==p&&$4==i{print;exit}' "$NODE_FILE")
-  [ -n "$line" ] || { printf '%s' '-|-|-|-|无TOS端点|TOS'; return; }
-  ipaddr=$(printf '%s\n' "$line" | awk -F '\t' '{print $6}')
   region=$(tos_region "$prov"); bucket=$(tos_bucket_host "$region")
-  work="$WORK_DIR/tos-${prov}-${isp}"
-  IFS='|' read -r urc umeta uss <<<"$(curl_probe upload "$bucket" "$ipaddr" "$work")"
-  IFS='|' read -r up ulat retrans ustatus <<<"$(parse_curl_metric upload "$urc" "$umeta" "$uss")"
-  IFS='|' read -r drc dmeta dss <<<"$(curl_probe download "$bucket" "$ipaddr" "$work")"
-  IFS='|' read -r down dlat dummy dstatus <<<"$(parse_curl_metric download "$drc" "$dmeta" "$dss")"
-  if [ "$ustatus" = "OK" ] && [ "$dstatus" = "OK" ]; then
-    latency="${ulat}/${dlat}"
-    printf '%s|%s|%s|%s|OK|TOS:%s' "$retrans" "$up" "$down" "$latency" "$ipaddr"
+  while IFS=$'\t' read -r type family node_prov node_isp host ipaddr port target; do
+    candidate=$((candidate + 1))
+    work="$WORK_DIR/tos-${prov}-${isp}-${candidate}"
+    IFS='|' read -r urc umeta uss <<<"$(curl_probe upload "$bucket" "$ipaddr" "$work")"
+    IFS='|' read -r up ulat retrans ustatus <<<"$(parse_curl_metric upload "$urc" "$umeta" "$uss")"
+    IFS='|' read -r drc dmeta dss <<<"$(curl_probe download "$bucket" "$ipaddr" "$work")"
+    IFS='|' read -r down dlat dummy dstatus <<<"$(parse_curl_metric download "$drc" "$dmeta" "$dss")"
+    if [ "$ustatus" = "OK" ] && [ "$dstatus" = "OK" ]; then
+      latency="${ulat}/${dlat}"
+      printf '%s|%s|%s|%s|OK|TOS:%s' "$retrans" "$up" "$down" "$latency" "$ipaddr"
+      return
+    fi
+  done < <(awk -F '\t' -v p="$prov" -v i="$isp" '$1=="tos"&&$2=="4"&&$3==p&&$4==i' "$NODE_FILE")
+  if [ "$candidate" -eq 0 ]; then
+    printf '%s' '-|-|-|-|无TOS端点|TOS'
   else
-    printf '%s' '-|-|-|-|TOS失败|TOS'
+    printf '%s' '-|-|-|-|全部TOS候选失败|TOS'
   fi
 }
 
@@ -736,7 +873,7 @@ run_speedtests() {
             IFS='|' read -r retrans up down latency status engine <<< "$result"
             [ "$status" = "OK" ] || result=""
           fi
-          [ -n "$result" ] || result=$(run_speedtest_go_row "$family" "$prov" "$isp")
+          [ -n "$result" ] || result=$(run_speedtest_row "$family" "$prov" "$isp")
           IFS='|' read -r retrans up down latency status engine <<< "$result"
         fi
         clear_progress
