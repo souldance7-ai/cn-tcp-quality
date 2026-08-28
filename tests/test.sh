@@ -10,11 +10,12 @@ chmod +x "$ROOT/cn-tcp-quality.sh" "$MOCK_BIN"/*
 bash -n "$ROOT/cn-tcp-quality.sh"
 "$ROOT/cn-tcp-quality.sh" --self-test --no-color
 
-PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
-  --count 5 --parallel 4 --no-color --output "$TEST_TMP/dual" >/dev/null
+CN_TCP_PROGRESS=always PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
+  --count 5 --parallel 4 --no-color --output "$TEST_TMP/dual" > "$TEST_TMP/dual-terminal.txt"
 
 [ "$(wc -l < "$TEST_TMP/dual/tcp-quality.csv")" -eq 31 ]
 [ "$(grep -c ',正常,' "$TEST_TMP/dual/tcp-quality.csv")" -eq 30 ]
+grep -q 'TCP 探测.*100%  30/30.*全部完成' "$TEST_TMP/dual-terminal.txt"
 
 MOCK_NO_IPV6=1 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
   --count 5 --parallel 4 --no-color --output "$TEST_TMP/no-ipv6" >/dev/null
@@ -25,13 +26,15 @@ MOCK_NO_IPV6=1 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
 CN_TCP_SPEEDTEST_SOURCE6="2001:db8::10" \
+CN_TCP_PROGRESS=always \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
-  --province bj --quick --speed --no-color --output "$TEST_TMP/speed-dual" >/dev/null
+  --province bj --quick --speed --no-color --output "$TEST_TMP/speed-dual" > "$TEST_TMP/speed-terminal.txt"
 
 [ "$(wc -l < "$TEST_TMP/speed-dual/single-thread-speed.csv")" -eq 7 ]
 [ "$(grep -c ',OK,' "$TEST_TMP/speed-dual/single-thread-speed.csv")" -eq 6 ]
 [ "$(grep -c '^IPv4,' "$TEST_TMP/speed-dual/single-thread-speed.csv")" -eq 3 ]
 [ "$(grep -c '^IPv6,' "$TEST_TMP/speed-dual/single-thread-speed.csv")" -eq 3 ]
+grep -q '单线程测速.*100%  6/6.*全部完成' "$TEST_TMP/speed-terminal.txt"
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
