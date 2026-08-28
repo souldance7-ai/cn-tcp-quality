@@ -15,7 +15,7 @@
 
 ## 一键运行
 
-上传到 GitHub 后，完整综合体验命令：
+完整综合体验命令：
 
 ```bash
 bash <(curl -fsSL --retry 3 "https://raw.githubusercontent.com/souldance7-ai/cn-tcp-quality/main/cn-tcp-quality.sh") --speed
