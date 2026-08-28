@@ -1,3 +1,40 @@
 #!/usr/bin/env bash
-# Force the main script to exercise its built-in node fallback.
+# Default behavior forces the main script to exercise its built-in node fallback.
+url=""
+output=""
+is_upload=0
+args=("$@")
+for ((i=0; i<${#args[@]}; i++)); do
+  case "${args[$i]}" in
+    -o) output="${args[$((i+1))]:-}" ;;
+    --data-binary) is_upload=1 ;;
+    http://*|https://*) url="${args[$i]}" ;;
+  esac
+done
+
+if [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] && [[ "$url" == *'/api/js/servers?'* ]]; then
+  payload='[
+    {"id":"ah-ct","sponsor":"China Telecom AnHui 5G","name":"Hefei","cc":"CN","lat":"31.8667","lon":"117.2833","host":"ct.example:8080","url":"http://ct.example:8080/speedtest/upload.php"},
+    {"id":"ah-cu","sponsor":"China Unicom Anhui","name":"Hefei","cc":"CN","lat":"31.8667","lon":"117.2833","host":"cu.example:8080","url":"http://cu.example:8080/speedtest/upload.php"},
+    {"id":"ah-cm","sponsor":"China Mobile Anhui","name":"Hefei","cc":"CN","lat":"31.8667","lon":"117.2833","host":"cm.example:8080","url":"http://cm.example:8080/speedtest/upload.php"}
+  ]'
+  if [ -n "$output" ] && [ "$output" != "/dev/null" ]; then
+    printf '%s\n' "$payload" > "$output"
+  else
+    printf '%s\n' "$payload"
+  fi
+  exit 0
+fi
+
+if [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] &&
+   { [[ "$url" == *'/download?size='* ]] || [[ "$url" == *'/random4000x4000.jpg?'* ]]; }; then
+  printf '200|12582912|12500000|0.050|1.000|1'
+  exit 0
+fi
+
+if [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] && [ "$is_upload" -eq 1 ] && [[ "$url" == *'/upload.php'* ]]; then
+  printf '200|8388608|6250000|0.060|1.000|1'
+  exit 0
+fi
+
 exit 22
