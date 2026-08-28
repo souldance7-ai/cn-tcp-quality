@@ -7,6 +7,12 @@ case "$host" in
 esac
 case "$mode" in
   ahostsv4) printf '198.51.100.20 STREAM %s\n' "$host" ;;
-  ahostsv6) printf '2001:db8::20 STREAM %s\n' "$host" ;;
+  ahostsv6)
+    if [ "${MOCK_IPV4_MAPPED_ONLY:-0}" = "1" ]; then
+      printf '::ffff:198.51.100.20 STREAM %s\n' "$host"
+    else
+      printf '2001:db8::20 STREAM %s\n' "$host"
+    fi
+    ;;
   *) exit 2 ;;
 esac
