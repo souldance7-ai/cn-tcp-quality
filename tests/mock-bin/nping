@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
 count=5
+family=4
+l2=0
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = "-c" ]; then count="$2"; shift 2; else shift; fi
+  case "$1" in
+    -c) count="$2"; shift 2 ;;
+    -6) family=6; shift ;;
+    --source-mac) l2=1; shift 2 ;;
+    *) shift ;;
+  esac
 done
+if [ "${MOCK_IPV6_NEEDS_L2:-0}" = "1" ] && [ "$family" -eq 6 ] && [ "$l2" -eq 0 ]; then
+  printf 'Raw packets sent: %s | Rcvd: 0 | Lost: %s (100.00%%)\n' "$count" "$count"
+  exit 0
+fi
 i=1
 while [ "$i" -le "$count" ]; do
   printf 'RCVD TCP response rtt=%s.00ms\n' "$((40+i))"
