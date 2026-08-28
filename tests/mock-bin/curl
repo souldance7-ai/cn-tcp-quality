@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Force the main script to exercise its built-in node fallback.
+exit 22
