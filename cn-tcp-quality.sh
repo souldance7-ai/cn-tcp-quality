@@ -6,9 +6,11 @@
 
 set -uo pipefail
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
-COUNT=10
+COUNT=30
+COUNT_EXPLICIT=0
+AUTO_RECHECK_COUNT=60
 PARALLEL=6
 RUN_SPEED=0
 SPEED_EXECUTED=0
@@ -22,6 +24,8 @@ SPEEDTEST_INSTALL_ERROR=""
 SOURCE_IPV4="${CN_TCP_SPEEDTEST_SOURCE4:-}"
 SOURCE_IPV6="${CN_TCP_SPEEDTEST_SOURCE6:-}"
 PROGRESS_MODE="${CN_TCP_PROGRESS:-auto}"
+BANNER_MODE="${CN_TCP_BANNER:-auto}"
+BANNER_PAUSE="${CN_TCP_BANNER_PAUSE:-0.8}"
 ONLY_FAMILY=""
 NO_COLOR=0
 QUICK=0
@@ -33,8 +37,14 @@ SCRIPT_NAME="CN TCP Quality"
 if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
   RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'
   CYAN=$'\033[36m'; BOLD=$'\033[1m'; DIM=$'\033[2m'; NC=$'\033[0m'
+  GOLD_WHITE=$'\033[38;5;231m'; GOLD_LIGHT=$'\033[38;5;228m'
+  GOLD_BRIGHT=$'\033[38;5;220m'; GOLD_AMBER=$'\033[38;5;214m'
+  GOLD_WARM=$'\033[38;5;178m'; GOLD_DARK=$'\033[38;5;136m'
+  GOLD_SHADOW=$'\033[38;5;94m'; TEXT_GRAY=$'\033[38;5;248m'
 else
   RED=""; GREEN=""; YELLOW=""; CYAN=""; BOLD=""; DIM=""; NC=""
+  GOLD_WHITE=""; GOLD_LIGHT=""; GOLD_BRIGHT=""; GOLD_AMBER=""
+  GOLD_WARM=""; GOLD_DARK=""; GOLD_SHADOW=""; TEXT_GRAY=""
 fi
 
 usage() {
@@ -46,8 +56,8 @@ CN TCP Quality V1
 
 选项：
   --speed             追加五省三网 IPv4／IPv6 单线程上下行测速（流量较大）
-  --quick             快速模式：每节点 5 包，测速使用节流模式
-  -c, --count N       每个 TCP 节点发包数，默认 10，范围 3-100
+  --quick             快速模式：每节点 10 包，测速使用节流模式
+  -c, --count N       每个 TCP 节点发包数，默认 30，范围 3-100
   -p, --parallel N    并行节点数，默认 6，范围 1-15
   --province CODE     仅测指定省份，可重复：bj/sh/gd/ah/js
   -4, --ipv4          仅测 IPv4
@@ -100,7 +110,7 @@ parse_args() {
         [ "${2:-}" != "" ] && [[ "$2" =~ ^[0-9]+$ ]] && [ "$2" -ge 3 ] && [ "$2" -le 100 ] || {
           echo "发包数必须为 3-100。" >&2; exit 2;
         }
-        COUNT="$2"; shift 2 ;;
+        COUNT="$2"; COUNT_EXPLICIT=1; shift 2 ;;
       -p|--parallel)
         [ "${2:-}" != "" ] && [[ "$2" =~ ^[0-9]+$ ]] && [ "$2" -ge 1 ] && [ "$2" -le 15 ] || {
           echo "并行数必须为 1-15。" >&2; exit 2;
@@ -120,12 +130,54 @@ parse_args() {
   done
 
   [ "$QUICK" -eq 0 ] || {
-    COUNT=5
+    [ "$COUNT_EXPLICIT" -eq 1 ] || COUNT=10
     SPEED_SECONDS=3
     SPEED_BYTES=$((64 * 1024 * 1024))
   }
-  [ "$NO_COLOR" -eq 0 ] || RED="" GREEN="" YELLOW="" CYAN="" BOLD="" DIM="" NC=""
+  [ "$NO_COLOR" -eq 0 ] || {
+    RED=""; GREEN=""; YELLOW=""; CYAN=""; BOLD=""; DIM=""; NC=""
+    GOLD_WHITE=""; GOLD_LIGHT=""; GOLD_BRIGHT=""; GOLD_AMBER=""
+    GOLD_WARM=""; GOLD_DARK=""; GOLD_SHADOW=""; TEXT_GRAY=""
+  }
   [ -n "$SELECTED_PROVINCES" ] || SELECTED_PROVINCES="北京|上海|广东|安徽|江苏"
+}
+
+banner_enabled() {
+  case "$BANNER_MODE" in
+    always|1|true) return 0 ;;
+    never|0|false) return 1 ;;
+    *) [ -t 1 ] ;;
+  esac
+}
+
+show_banner() {
+  banner_enabled || return 0
+  printf '\n'
+  printf '%b♣  CN TCP  ▓▓  %bNetwork Quality Benchmark (V%s)%b  ▓▓%b\n' \
+    "$GOLD_BRIGHT$BOLD" "$TEXT_GRAY" "$VERSION" "$GOLD_BRIGHT" "$NC"
+  printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' \
+    "$GOLD_BRIGHT" "$NC"
+  printf '%b  ██████╗ ███╗   ██╗    ████████╗ ██████╗██████╗ %b\n' "$GOLD_WHITE" "$NC"
+  printf '%b ██╔════╝ ████╗  ██║    ╚══██╔══╝██╔════╝██╔══██╗%b\n' "$GOLD_LIGHT" "$NC"
+  printf '%b ██║      ██╔██╗ ██║       ██║   ██║     ██████╔╝%b\n' "$GOLD_BRIGHT" "$NC"
+  printf '%b ██║      ██║╚██╗██║       ██║   ██║     ██╔═══╝ %b\n' "$GOLD_AMBER" "$NC"
+  printf '%b ╚██████╗ ██║ ╚████║       ██║   ╚██████╗██║     %b\n' "$GOLD_WARM" "$NC"
+  printf '%b  ╚═════╝ ╚═╝  ╚═══╝       ╚═╝    ╚═════╝╚═╝     %b\n' "$GOLD_DARK" "$NC"
+  printf '%b     ░▒▓██████████████████████████████████████▓▒░%b\n' "$GOLD_SHADOW" "$NC"
+  printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' \
+    "$GOLD_BRIGHT" "$NC"
+  printf '%b♣  [ 五省三网双栈检测 · TCP 丢包／延迟／抖动／P95 · 单线程测速 ]%b\n' \
+    "$GOLD_BRIGHT$BOLD" "$NC"
+  printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' \
+    "$GOLD_BRIGHT" "$NC"
+  printf '%b• 隐私承诺：%b本地独立测速分析 · 绝不上报结果 · 绝不采集公网 IP%b\n' \
+    "$GOLD_LIGHT$BOLD" "$TEXT_GRAY" "$NC"
+  printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n\n' \
+    "$GOLD_BRIGHT" "$NC"
+  case "$BANNER_PAUSE" in
+    0|0.0|'') ;;
+    *) sleep "$BANNER_PAUSE" 2>/dev/null || true ;;
+  esac
 }
 
 need_root() {
@@ -364,6 +416,7 @@ probe_node() {
   local idx="$1" family="$2" prov="$3" isp="$4" host="$5" ipaddr="$6" port="$7"
   local raw="$WORK_DIR/nping.$idx.log" values="$WORK_DIR/rtt.$idx" metrics status sent received loss
   local i attempt max_attempts packet_log one_received one_rtt source_port sequence rc timeouts=0
+  local target_count initial_count
   local l2_route iface source_ip source_mac dest_mac l2_ready=0 l2_preferred=0 use_l2
   local -a args
   : > "$values"; : > "$raw"
@@ -375,8 +428,8 @@ probe_node() {
     write_skip_result "$idx" "$family" "$prov" "$isp" "$host" "$ipaddr" "跳过"
     return
   fi
-  sent="$COUNT"; received=0
-  for ((i=1; i<=COUNT; i++)); do
+  sent=0; received=0; initial_count="$COUNT"; target_count="$COUNT"; i=1
+  while [ "$i" -le "$target_count" ]; do
     max_attempts=1
     [ "$family" = "6" ] && [ "$l2_preferred" -eq 0 ] && max_attempts=2
     for ((attempt=1; attempt<=max_attempts; attempt++)); do
@@ -415,6 +468,13 @@ probe_node() {
         break
       fi
     done
+    sent=$((sent + 1))
+    if [ "$i" -eq "$initial_count" ] && [ "$QUICK" -eq 0 ] &&
+       [ "$COUNT_EXPLICIT" -eq 0 ] && [ "$received" -gt 0 ] &&
+       [ "$received" -lt "$sent" ] && [ "$AUTO_RECHECK_COUNT" -gt "$initial_count" ]; then
+      target_count="$AUTO_RECHECK_COUNT"
+    fi
+    i=$((i + 1))
   done
   metrics=$(calc_metrics "$values" "$sent" "$received")
   loss=${metrics%%$'\t'*}
@@ -670,6 +730,26 @@ speedtest_server_ids() {
   esac
 }
 
+speedtest_location() {
+  case "$1" in
+    北京) printf '39.9042,116.4074' ;;
+    上海) printf '31.2304,121.4737' ;;
+    广东) printf '23.1291,113.2644' ;;
+    安徽) printf '31.8206,117.2272' ;;
+    江苏) printf '32.0603,118.7969' ;;
+    *) return 1 ;;
+  esac
+}
+
+speedtest_search_keyword() {
+  case "$1" in
+    电信) printf 'China Telecom' ;;
+    联通) printf 'China Unicom' ;;
+    移动) printf 'China Mobile' ;;
+    *) return 1 ;;
+  esac
+}
+
 discover_speedtest_sources() {
   local target4 target6
   target4=$(awk -F '\t' '$3=="4"&&$7!="-"{print $7;exit}' "$PLAN_FILE")
@@ -756,8 +836,49 @@ json_number() {
     head -1 | sed -E 's/.*:[[:space:]]*//'
 }
 
+json_string() {
+  local key="$1" file="$2"
+  grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$file" 2>/dev/null |
+    head -1 | sed -E 's/^[^:]*:[[:space:]]*"//;s/"$//'
+}
+
+execute_speedtest_candidate() {
+  local family="$1" tag="$2" label="$3"
+  shift 3
+  local json="$WORK_DIR/speedtest-${family}-${tag}.json"
+  local sslog="$WORK_DIR/speedtest-${family}-${tag}.ss"
+  local pid monitor_pid rc=0 dl up latency retrans endpoint_id
+  timeout 120 "$@" > "$json" 2>/dev/null & pid=$!
+  monitor_speedtest_pid "$pid" "$sslog" & monitor_pid=$!
+  wait "$pid" || rc=$?
+  wait "$monitor_pid" 2>/dev/null || true
+  [ "$rc" -eq 0 ] || return 1
+  if [ "$SPEEDTEST_ENGINE" = "cli" ]; then
+    dl=$(json_number download "$json"); up=$(json_number upload "$json"); latency=$(json_number ping "$json")
+    [[ "$dl" =~ ^[-+0-9.eE]+$ ]] && [[ "$up" =~ ^[-+0-9.eE]+$ ]] || return 1
+    awk -v d="$dl" -v u="$up" 'BEGIN{exit !(d>=100000&&u>=100000)}' || return 3
+    dl=$(awk -v n="$dl" 'BEGIN{printf "%.1f",n/1000000}')
+    up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n/1000000}')
+    if [[ "$latency" =~ ^[-+0-9.eE]+$ ]]; then latency=$(awk -v n="$latency" 'BEGIN{printf "%.0f",n}'); else latency="-"; fi
+  else
+    dl=$(json_number dl_speed "$json"); up=$(json_number ul_speed "$json"); latency=$(json_number latency "$json")
+    [[ "$dl" =~ ^[-+0-9.eE]+$ ]] && [[ "$up" =~ ^[-+0-9.eE]+$ ]] || return 1
+    # speedtest-go 输出字节／秒；12500 B/s 等于 0.1 Mbps，低于此值不标记为 OK。
+    awk -v d="$dl" -v u="$up" 'BEGIN{exit !(d>=12500&&u>=12500)}' || return 3
+    dl=$(awk -v n="$dl" 'BEGIN{printf "%.1f",n*8/1000000}')
+    up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n*8/1000000}')
+    if [[ "$latency" =~ ^[-+0-9.eE]+$ ]]; then latency=$(awk -v n="$latency" 'BEGIN{printf "%.0f",n/1000000}'); else latency="-"; fi
+  fi
+  endpoint_id=$(json_string id "$json" 2>/dev/null || true)
+  [ -n "$endpoint_id" ] || endpoint_id=$(json_number id "$json" 2>/dev/null || true)
+  retrans=$(retrans_percent_from_ss "$sslog")
+  printf '%s|%s|%s|%s|OK|speedtest.net#%s(%s)' \
+    "$retrans" "$up" "$dl" "$latency" "${endpoint_id:-unknown}" "$label"
+}
+
 run_speedtest_row() {
-  local family="$1" prov="$2" isp="$3" source ids id json sslog pid monitor_pid rc dl up latency retrans args=()
+  local family="$1" prov="$2" isp="$3" source ids id location keyword result rc low_speed=0
+  local -a args=()
   if [ "$family" = "4" ]; then source="$SOURCE_IPV4"; else source="$SOURCE_IPV6"; fi
   [ -n "$source" ] || {
     printf '%s' "-|-|-|-|无本地IPv${family}|speedtest-go"
@@ -767,42 +888,34 @@ run_speedtest_row() {
     printf '%s' "-|-|-|-|${SPEEDTEST_INSTALL_ERROR:-测速核心安装失败}|speedtest"
     return
   }
+  [ "$QUICK" -eq 0 ] || args+=(--saving-mode)
+  if [ "$SPEEDTEST_ENGINE" = "go" ]; then
+    location=$(speedtest_location "$prov" 2>/dev/null || true)
+    keyword=$(speedtest_search_keyword "$isp" 2>/dev/null || true)
+    if [ -n "$location" ] && [ -n "$keyword" ]; then
+      result=$(execute_speedtest_candidate "$family" "dynamic-${prov}-${isp}" "dynamic/go" \
+        "$SPEEDTEST_BIN" --location="$location" --search="$keyword" --filter-cc=CN \
+        --source="$source" --thread=1 --json "${args[@]}")
+      rc=$?
+      if [ "$rc" -eq 0 ]; then printf '%s' "$result"; return; fi
+      [ "$rc" -ne 3 ] || low_speed=1
+    fi
+  fi
   ids=$(speedtest_server_ids "$prov" "$isp" 2>/dev/null || true)
   [ -n "$ids" ] || { printf '%s' '-|-|-|-|无候选端点|speedtest-go'; return; }
-  [ "$QUICK" -eq 0 ] || args+=(--saving-mode)
   for id in $ids; do
-    json="$WORK_DIR/speedtest-${family}-${prov}-${isp}-${id}.json"
-    sslog="$WORK_DIR/speedtest-${family}-${prov}-${isp}-${id}.ss"
     if [ "$SPEEDTEST_ENGINE" = "cli" ]; then
-      timeout 120 python3 "$SPEEDTEST_BIN" --server "$id" --source "$source" --single --secure --json > "$json" 2>/dev/null & pid=$!
+      result=$(execute_speedtest_candidate "$family" "${prov}-${isp}-${id}" "static/cli" \
+        python3 "$SPEEDTEST_BIN" --server "$id" --source "$source" --single --secure --json)
     else
-      timeout 120 "$SPEEDTEST_BIN" --server="$id" --source="$source" --thread=1 --json "${args[@]}" > "$json" 2>/dev/null & pid=$!
+      result=$(execute_speedtest_candidate "$family" "${prov}-${isp}-${id}" "static/go" \
+        "$SPEEDTEST_BIN" --server="$id" --source="$source" --thread=1 --json "${args[@]}")
     fi
-    monitor_speedtest_pid "$pid" "$sslog" & monitor_pid=$!
-    wait "$pid"; rc=$?
-    wait "$monitor_pid" 2>/dev/null || true
-    [ "$rc" -eq 0 ] || continue
-    if [ "$SPEEDTEST_ENGINE" = "cli" ]; then
-      dl=$(json_number download "$json"); up=$(json_number upload "$json"); latency=$(json_number ping "$json")
-    else
-      dl=$(json_number dl_speed "$json"); up=$(json_number ul_speed "$json"); latency=$(json_number latency "$json")
-    fi
-    if [[ "$dl" =~ ^[-+0-9.eE]+$ ]] && [[ "$up" =~ ^[-+0-9.eE]+$ ]] &&
-       awk -v d="$dl" -v u="$up" 'BEGIN{exit !(d>0&&u>0)}'; then
-      if [ "$SPEEDTEST_ENGINE" = "cli" ]; then
-        dl=$(awk -v n="$dl" 'BEGIN{printf "%.1f",n/1000000}')
-        up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n/1000000}')
-        if [[ "$latency" =~ ^[-+0-9.eE]+$ ]]; then latency=$(awk -v n="$latency" 'BEGIN{printf "%.0f",n}'); else latency="-"; fi
-      else
-        dl=$(awk -v n="$dl" 'BEGIN{printf "%.1f",n*8/1000000}')
-        up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n*8/1000000}')
-        if [[ "$latency" =~ ^[-+0-9.eE]+$ ]]; then latency=$(awk -v n="$latency" 'BEGIN{printf "%.0f",n/1000000}'); else latency="-"; fi
-      fi
-      retrans=$(retrans_percent_from_ss "$sslog")
-      printf '%s|%s|%s|%s|OK|speedtest.net#%s(%s)' "$retrans" "$up" "$dl" "$latency" "$id" "$SPEEDTEST_ENGINE"
-      return
-    fi
+    rc=$?
+    if [ "$rc" -eq 0 ]; then printf '%s' "$result"; return; fi
+    [ "$rc" -ne 3 ] || low_speed=1
   done
+  [ "$low_speed" -eq 0 ] || { printf '%s' '-|-|-|-|测速低于0.1Mbps|speedtest'; return; }
   printf '%s' '-|-|-|-|端点不可用或不支持该IP族|speedtest-go'
 }
 
@@ -930,6 +1043,7 @@ main() {
   RESULT_DIR="$WORK_DIR/results"; mkdir -p "$RESULT_DIR"
   NODE_FILE="$WORK_DIR/nodes.tsv"; PLAN_FILE="$WORK_DIR/plan.tsv"
   trap 'rm -rf -- "$WORK_DIR"' EXIT INT TERM
+  [ "$SELF_TEST" -eq 1 ] || show_banner
   load_nodes
   prepare_probe_plan
   [ "$SELF_TEST" -eq 0 ] || { self_test; exit 0; }
@@ -937,15 +1051,15 @@ main() {
   install_dependencies
   IPV6_OK=0; ipv6_route_available && IPV6_OK=1
 
-  echo -e "${BOLD}${CYAN}============================================================${NC}"
-  echo -e "${BOLD} $SCRIPT_NAME V$VERSION${NC}"
-  echo " 五省三网双栈 TCP 丢包／延迟／抖动／P95"
-  echo " 不上传报告／不采集公网 IP"
-  echo -e "${BOLD}${CYAN}============================================================${NC}"
   echo "报告时间：$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S CST（北京时间）')"
   echo "节点来源：$NODE_SOURCE"
   echo "测试范围：$SELECTED_PROVINCES"
   echo "IPv6 状态：$([ "$IPV6_OK" -eq 1 ] && echo 可用 || echo 无可用默认路由，将自动跳过)"
+  if [ "$QUICK" -eq 0 ] && [ "$COUNT_EXPLICIT" -eq 0 ]; then
+    echo "丢包采样：每节点 30 包；部分丢包自动补测至 60 包"
+  else
+    echo "丢包采样：每节点 $COUNT 包"
+  fi
   echo
   echo -e "${DIM}正在探测 $(wc -l < "$PLAN_FILE") 个节点，请稍候……${NC}"
   run_tcp_probes
