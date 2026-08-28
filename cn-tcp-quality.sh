@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.1.0"
+VERSION="1.2.0"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 COUNT=10
 PARALLEL=6
@@ -19,6 +19,7 @@ SPEEDTEST_GO_VERSION="${CN_TCP_SPEEDTEST_GO_VERSION:-1.8.2}"
 SPEEDTEST_BIN="${CN_TCP_SPEEDTEST_BIN:-}"
 SOURCE_IPV4="${CN_TCP_SPEEDTEST_SOURCE4:-}"
 SOURCE_IPV6="${CN_TCP_SPEEDTEST_SOURCE6:-}"
+PROGRESS_MODE="${CN_TCP_PROGRESS:-auto}"
 ONLY_FAMILY=""
 NO_COLOR=0
 QUICK=0
@@ -59,6 +60,7 @@ CN TCP Quality V1
 说明：
   双栈 TCP 主表覆盖北京、上海、广东、安徽、江苏三网。
   单线程吞吐会逐项测试五省三网双栈；端点不支持时明确显示原因。
+  TCP 探测与单线程测速均显示动态进度、百分比及完成数量。
   不上传报告，不采集公网 IP，不参与排行榜。
 EOF
 }
@@ -340,16 +342,27 @@ probe_node() {
 }
 
 run_tcp_probes() {
-  local idx type family prov isp host ipaddr port target active=0
+  local idx type family prov isp host ipaddr port target active=0 completed=0 total current
+  total=$(wc -l < "$PLAN_FILE" | tr -d ' ')
+  render_progress "TCP 探测" 0 "$total" "准备节点"
   while IFS=$'\t' read -r idx type family prov isp host ipaddr port target; do
+    current="IPv${family} ${prov}${isp}"
     probe_node "$idx" "$family" "$prov" "$isp" "$host" "$ipaddr" "$port" &
     active=$((active + 1))
     if [ "$active" -ge "$PARALLEL" ]; then
       wait -n 2>/dev/null || true
       active=$((active - 1))
+      completed=$((completed + 1))
+      render_progress "TCP 探测" "$completed" "$total" "$current"
     fi
   done < "$PLAN_FILE"
-  wait || true
+  while [ "$active" -gt 0 ]; do
+    wait -n 2>/dev/null || true
+    active=$((active - 1))
+    completed=$((completed + 1))
+    render_progress "TCP 探测" "$completed" "$total" "收尾节点"
+  done
+  finish_progress "TCP 探测" "$total" "全部完成"
 }
 
 display_width() {
@@ -363,6 +376,56 @@ pad_left() {
   local width="$1" text="$2" used spaces
   used=$(display_width "$text"); spaces=$((width-used)); [ "$spaces" -lt 0 ] && spaces=0
   printf '%*s%s' "$spaces" '' "$text"
+}
+
+progress_enabled() {
+  case "$PROGRESS_MODE" in
+    always|1|true) return 0 ;;
+    never|0|false) return 1 ;;
+    *) [ -t 1 ] ;;
+  esac
+}
+
+clear_progress() {
+  progress_enabled || return 0
+  printf '\r\033[K'
+}
+
+render_progress() {
+  local stage="$1" done="$2" total="$3" detail="$4"
+  local width=30 percent filled i position red green blue
+  progress_enabled || return 0
+  [ "$total" -gt 0 ] || total=1
+  percent=$((done * 100 / total))
+  [ "$percent" -le 100 ] || percent=100
+  filled=$((done * width / total))
+  [ "$filled" -le "$width" ] || filled="$width"
+  printf '\r\033[K  %-12s [' "$stage"
+  for ((i=0; i<width; i++)); do
+    if [ "$i" -lt "$filled" ]; then
+      if [ -n "$CYAN" ]; then
+        position=$((i * 100 / (width - 1)))
+        if [ "$position" -lt 50 ]; then
+          red=255; green=$((position * 510 / 100)); blue=0
+        else
+          red=$((255 - (position - 50) * 510 / 100)); green=255; blue=0
+        fi
+        printf '\033[38;2;%d;%d;%dm█' "$red" "$green" "$blue"
+      else
+        printf '#'
+      fi
+    else
+      if [ -n "$DIM" ]; then printf '%b░%b' "$DIM" "$NC"; else printf '-'; fi
+    fi
+  done
+  printf '%b] %3d%%  %d/%d  当前：%s' "$NC" "$percent" "$done" "$total" "$detail"
+}
+
+finish_progress() {
+  local stage="$1" total="$2" detail="$3"
+  progress_enabled || return 0
+  render_progress "$stage" "$total" "$total" "$detail"
+  printf '\n'
 }
 
 metric_text() {
@@ -646,11 +709,13 @@ print_speed_result_row() {
 }
 
 run_speedtests() {
-  local family prov isp result retrans up down latency status engine
+  local family prov isp result retrans up down latency status engine current
+  local completed=0 total
   SPEED_CSV="$OUTPUT_DIR/single-thread-speed.csv"
   SPEED_EXECUTED=1
   printf '\xEF\xBB\xBF协议,省份,运营商,回程重传(%%),回程速度(Mbps),去程速度(Mbps),节点延迟(ms),状态,测速端点\n' > "$SPEED_CSV"
   discover_speedtest_sources
+  total=$(wc -l < "$PLAN_FILE" | tr -d ' ')
   echo -e "${BOLD}${CYAN}五省三网 IPv4／IPv6 单线程测速${NC}"
   echo -e "${DIM}每个方向仅使用一个 TCP 连接；北上广 IPv4 优先 TOS，其余使用逐运营商测速端点。${NC}"
   echo
@@ -660,23 +725,29 @@ run_speedtests() {
     for prov in 北京 上海 广东 安徽 江苏; do
       selected_province "$prov" || continue
       for isp in 电信 联通 移动; do
+        current="IPv${family} ${prov}${isp}"
+        render_progress "单线程测速" "$completed" "$total" "$current"
         if [ "$family" = "6" ] && [ "$IPV6_OK" -ne 1 ]; then
-          print_speed_result_row "$family" "$prov" "$isp" '-' '-' '-' '-' '本机无IPv6，跳过' '-'
-          continue
-        fi
-        result=""
-        if [ "$family" = "4" ] && [[ "$prov" =~ ^(北京|上海|广东)$ ]]; then
-          result=$(run_tos_speed_row "$prov" "$isp")
+          retrans='-'; up='-'; down='-'; latency='-'; status='本机无IPv6，跳过'; engine='-'
+        else
+          result=""
+          if [ "$family" = "4" ] && [[ "$prov" =~ ^(北京|上海|广东)$ ]]; then
+            result=$(run_tos_speed_row "$prov" "$isp")
+            IFS='|' read -r retrans up down latency status engine <<< "$result"
+            [ "$status" = "OK" ] || result=""
+          fi
+          [ -n "$result" ] || result=$(run_speedtest_go_row "$family" "$prov" "$isp")
           IFS='|' read -r retrans up down latency status engine <<< "$result"
-          [ "$status" = "OK" ] || result=""
         fi
-        [ -n "$result" ] || result=$(run_speedtest_go_row "$family" "$prov" "$isp")
-        IFS='|' read -r retrans up down latency status engine <<< "$result"
+        clear_progress
         print_speed_result_row "$family" "$prov" "$isp" "$retrans" "$up" "$down" "$latency" "$status" "$engine"
+        completed=$((completed + 1))
+        render_progress "单线程测速" "$completed" "$total" "完成 ${current}"
       done
     done
-    echo
   done
+  finish_progress "单线程测速" "$total" "全部完成"
+  echo
 }
 
 write_summary() {
