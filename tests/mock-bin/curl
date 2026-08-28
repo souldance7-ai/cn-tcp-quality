@@ -26,13 +26,27 @@ if [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] && [[ "$url" == *'/api/js/servers?'* ]]; t
   exit 0
 fi
 
-if [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] &&
-   { [[ "$url" == *'/download?size='* ]] || [[ "$url" == *'/random4000x4000.jpg?'* ]]; }; then
+if [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ] && [[ "$url" == *'/speedtest.cn-CN-ID/main/CN.csv'* ]]; then
+  payload='id,active,https,cros,preferred,host,country_code,province,city,ver,operator,lon,lat,times,high_speed,sponsor,sponsor_url,current_version,distance,pingUrl,downloadUrl,uploadUrl,websocketUrl
+cn-ah-ct,1,0,1,1,ct.example:8080,CN,安徽,合肥,1,电信,117.2833,31.8667,1,1,安徽电信,-,1,0,http://ct.example:8080/speedtest/ping,http://ct.example:8080/speedtest/download?size=104857600,http://ct.example:8080/speedtest/upload.php,-
+cn-ah-cu,1,0,1,1,cu.example:8080,CN,安徽,合肥,1,联通,117.2833,31.8667,1,1,安徽联通,-,1,0,http://cu.example:8080/speedtest/ping,http://cu.example:8080/speedtest/download?size=104857600,http://cu.example:8080/speedtest/upload.php,-
+cn-ah-cm,1,0,1,1,cm.example:8080,CN,安徽,合肥,1,移动,117.2833,31.8667,1,1,安徽移动,-,1,0,http://cm.example:8080/speedtest/ping,http://cm.example:8080/speedtest/download?size=104857600,http://cm.example:8080/speedtest/upload.php,-'
+  if [ -n "$output" ] && [ "$output" != "/dev/null" ]; then
+    printf '%s\n' "$payload" > "$output"
+  else
+    printf '%s\n' "$payload"
+  fi
+  exit 0
+fi
+
+if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ]; } &&
+   { [[ "$url" == *'/download?'* ]] || [[ "$url" == *'/random4000x4000.jpg?'* ]]; }; then
   printf '200|12582912|12500000|0.050|1.000|1'
   exit 0
 fi
 
-if [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] && [ "$is_upload" -eq 1 ] && [[ "$url" == *'/upload.php'* ]]; then
+if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ]; } &&
+   [ "$is_upload" -eq 1 ] && [[ "$url" == *'/upload.php'* ]]; then
   printf '200|8388608|6250000|0.060|1.000|1'
   exit 0
 fi
