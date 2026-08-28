@@ -6,8 +6,9 @@
 
 set -uo pipefail
 
-VERSION="1.5.0"
+VERSION="1.6.0"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
+SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 COUNT=30
 COUNT_EXPLICIT=0
 AUTO_RECHECK_COUNT=60
@@ -809,12 +810,76 @@ for row in rows if isinstance(rows, list) else []:
         continue
     fields = [str(row.get("id", "-")), str(row.get("sponsor", "-")),
               str(row.get("name", "-")), str(row["url"]), host,
-              str(port), origin, base, f"{d:.1f}"]
+              str(port), origin, base, f"{d:.1f}", "-", "OoklaHTTP"]
     found.append((d, fields))
 
 for _, fields in sorted(found, key=lambda item: item[0])[:8]:
     print("\t".join(value.replace("\t", " ").replace("\n", " ") for value in fields))
 PY
+}
+
+ensure_speedtest_cn_catalog() {
+  local file="$WORK_DIR/speedtest-cn.csv"
+  if [ -s "$file" ] && head -1 "$file" 2>/dev/null | grep -q '^id,active,https,'; then
+    printf '%s' "$file"
+    return 0
+  fi
+  curl -fsSL --retry 2 --connect-timeout 8 --max-time 30 \
+    -A 'Mozilla/5.0 CN-TCP-Quality/1.6' "$SPEEDTEST_CN_CATALOG_URL" -o "$file" 2>/dev/null || return 1
+  head -1 "$file" 2>/dev/null | grep -q '^id,active,https,' || return 1
+  printf '%s' "$file"
+}
+
+speedtest_cn_http_candidates() {
+  local prov="$1" isp="$2" file
+  file=$(ensure_speedtest_cn_catalog) || return 1
+  python3 - "$file" "$prov" "$isp" <<'PY'
+import csv, sys
+from urllib.parse import urlsplit
+
+path, province, isp = sys.argv[1:]
+seen = set()
+found = []
+try:
+    stream = open(path, newline="", encoding="utf-8-sig", errors="replace")
+except OSError:
+    raise SystemExit(1)
+with stream:
+    for row in csv.DictReader(stream):
+        if row.get("province", "").strip() != province:
+            continue
+        if row.get("operator", "").strip() != isp:
+            continue
+        upload = row.get("uploadUrl", "").strip()
+        download = row.get("downloadUrl", "").strip()
+        try:
+            parts = urlsplit(upload)
+            host = parts.hostname
+            if not host or not download:
+                continue
+            port = parts.port or (443 if parts.scheme == "https" else 80)
+            origin = f"{parts.scheme}://{host}:{port}"
+            base = upload.rsplit("/", 1)[0]
+        except Exception:
+            continue
+        key = (host, port, upload, download)
+        if key in seen:
+            continue
+        seen.add(key)
+        preferred = row.get("preferred", "0").strip() == "1"
+        high_speed = row.get("high_speed", "0").strip() == "1"
+        fields = [row.get("id", "-"), row.get("sponsor", "speedtest.cn"),
+                  row.get("city", "-"), upload, host, str(port), origin,
+                  base, row.get("distance", "-"), download, "SpeedtestCN"]
+        found.append((not preferred, not high_speed, fields))
+for _, _, fields in sorted(found)[:10]:
+    print("\t".join((value or "-").replace("\t", " ").replace("\n", " ") for value in fields))
+PY
+}
+
+all_direct_http_candidates() {
+  speedtest_http_candidates "$1" "$2" 2>/dev/null || true
+  speedtest_cn_http_candidates "$1" "$2" 2>/dev/null || true
 }
 
 resolve_speedtest_host() {
@@ -893,28 +958,46 @@ parse_direct_http_metric() {
 
 run_direct_http_speed_row() {
   local family="$1" prov="$2" isp="$3" source
-  local id sponsor city upload_url host port origin base distance ipaddr resolve_seen=0 tested=0
+  local id sponsor city upload_url host port origin base distance download_hint catalog_source
+  local ipaddr resolve_seen=0 tested=0
   local work drc dmeta dss down dlat dummy dstatus urc umeta uss up ulat retrans ustatus
-  local download_url upload_test_url status latency saved_down='' saved_dlat='' saved_engine=''
+  local download_url download_hint_url upload_test_url status latency saved_down='' saved_dlat='' saved_engine=''
   if [ "$family" = "4" ]; then source="$SOURCE_IPV4"; else source="$SOURCE_IPV6"; fi
   [ -n "$source" ] || { printf '%s' "-|-|-|-|无本地IPv${family}|direct-http"; return; }
-  while IFS=$'\t' read -r id sponsor city upload_url host port origin base distance; do
+  while IFS=$'\t' read -r id sponsor city upload_url host port origin base distance download_hint catalog_source; do
     [ -n "$host" ] || continue
     ipaddr=$(resolve_speedtest_host "$family" "$host" 2>/dev/null || true)
-    [ -n "$ipaddr" ] || continue
+    if [ -z "$ipaddr" ]; then
+      printf 'IPv%s,%s,%s,%s,%s,%s,-,解析,无对应地址族\n' \
+        "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" >> "$SPEED_AUDIT_CSV"
+      continue
+    fi
     resolve_seen=$((resolve_seen + 1))
     work="$WORK_DIR/direct-${family}-${prov}-${isp}-${id}"
     dstatus="FAIL"
+    download_hint_url=""
+    if [ "${download_hint:--}" != "-" ]; then
+      case "$download_hint" in
+        *\?*) download_hint_url="${download_hint}&guid=cn-tcp-$RANDOM" ;;
+        *) download_hint_url="${download_hint}?guid=cn-tcp-$RANDOM" ;;
+      esac
+    fi
     for download_url in \
+      "$download_hint_url" \
       "${origin}/download?size=${SPEED_BYTES}&guid=cn-tcp-$RANDOM" \
       "${base}/random4000x4000.jpg?x=$(date +%s)$RANDOM"; do
+      [ -n "$download_url" ] || continue
       IFS='|' read -r drc dmeta dss <<<"$(direct_http_download "$family" "$source" "$host" "$port" "$ipaddr" "$download_url" "$work")"
       IFS='|' read -r down dlat dummy dstatus <<<"$(parse_direct_http_metric download "$drc" "$dmeta" "$dss")"
       [ "$dstatus" = "OK" ] && break
     done
-    [ "$dstatus" = "OK" ] || continue
+    if [ "$dstatus" != "OK" ]; then
+      printf 'IPv%s,%s,%s,%s,%s,%s,%s,下载,失败\n' \
+        "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" >> "$SPEED_AUDIT_CSV"
+      continue
+    fi
     tested=$((tested + 1))
-    saved_down="$down"; saved_dlat="$dlat"; saved_engine="OoklaHTTP#${id}:${host}"
+    saved_down="$down"; saved_dlat="$dlat"; saved_engine="${catalog_source:-DirectHTTP}#${id}:${host}"
     for upload_test_url in \
       "$upload_url" \
       "${origin}/upload?guid=cn-tcp-$RANDOM"; do
@@ -922,11 +1005,15 @@ run_direct_http_speed_row() {
       IFS='|' read -r up ulat retrans ustatus <<<"$(parse_direct_http_metric upload "$urc" "$umeta" "$uss")"
       if [ "$ustatus" = "OK" ]; then
         latency="${ulat}/${dlat}"
+        printf 'IPv%s,%s,%s,%s,%s,%s,%s,双向,成功\n' \
+          "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" >> "$SPEED_AUDIT_CSV"
         printf '%s|%s|%s|%s|OK|%s' "$retrans" "$up" "$down" "$latency" "$saved_engine"
         return
       fi
     done
-  done < <(speedtest_http_candidates "$prov" "$isp" 2>/dev/null || true)
+    printf 'IPv%s,%s,%s,%s,%s,%s,%s,上传,失败\n' \
+      "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" >> "$SPEED_AUDIT_CSV"
+  done < <(all_direct_http_candidates "$prov" "$isp")
   if [ -n "$saved_down" ]; then
     printf '%s' "-|-|${saved_down}|${saved_dlat}|仅下载可用|${saved_engine}"
   elif [ "$resolve_seen" -eq 0 ]; then
@@ -1195,8 +1282,10 @@ run_speedtests() {
   local family prov isp result retrans up down latency status engine current
   local completed=0 total
   SPEED_CSV="$OUTPUT_DIR/single-thread-speed.csv"
+  SPEED_AUDIT_CSV="$OUTPUT_DIR/endpoint-audit.csv"
   SPEED_EXECUTED=1
   printf '\xEF\xBB\xBF协议,省份,运营商,回程重传(%%),回程速度(Mbps),去程速度(Mbps),节点延迟(ms),状态,测速端点\n' > "$SPEED_CSV"
+  printf '\xEF\xBB\xBF协议,省份,运营商,目录来源,端点ID,域名,解析地址,阶段,结果\n' > "$SPEED_AUDIT_CSV"
   discover_speedtest_sources
   total=$(wc -l < "$PLAN_FILE" | tr -d ' ')
   echo -e "${BOLD}${CYAN}五省三网 IPv4／IPv6 单线程测速${NC}"
@@ -1257,6 +1346,7 @@ write_summary() {
     echo "文件："
     echo "  tcp-quality.csv"
     [ "$SPEED_EXECUTED" -eq 1 ] && echo "  single-thread-speed.csv"
+    [ "$SPEED_EXECUTED" -eq 1 ] && echo "  endpoint-audit.csv"
   } > "$report"
 }
 
