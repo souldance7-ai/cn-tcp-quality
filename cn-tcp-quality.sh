@@ -6,15 +6,19 @@
 
 set -uo pipefail
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
-COUNT=20
+COUNT=10
 PARALLEL=6
-DELAY_MS=120
+DELAY_SECONDS=1
 RUN_SPEED=0
 SPEED_EXECUTED=0
 SPEED_SECONDS=8
 SPEED_BYTES=$((256 * 1024 * 1024))
+SPEEDTEST_GO_VERSION="${CN_TCP_SPEEDTEST_GO_VERSION:-1.8.2}"
+SPEEDTEST_BIN="${CN_TCP_SPEEDTEST_BIN:-}"
+SOURCE_IPV4="${CN_TCP_SPEEDTEST_SOURCE4:-}"
+SOURCE_IPV6="${CN_TCP_SPEEDTEST_SOURCE6:-}"
 ONLY_FAMILY=""
 NO_COLOR=0
 QUICK=0
@@ -38,9 +42,9 @@ CN TCP Quality V1
   bash cn-tcp-quality.sh [选项]
 
 选项：
-  --speed             追加真实 TOS 单线程上下行测速（流量较大）
-  --quick             快速模式：每节点 8 包，测速 3 秒／64MiB
-  -c, --count N       每个 TCP 节点发包数，默认 20，范围 3-100
+  --speed             追加五省三网 IPv4／IPv6 单线程上下行测速（流量较大）
+  --quick             快速模式：每节点 5 包，测速使用节流模式
+  -c, --count N       每个 TCP 节点发包数，默认 10，范围 3-100
   -p, --parallel N    并行节点数，默认 6，范围 1-15
   --province CODE     仅测指定省份，可重复：bj/sh/gd/ah/js
   -4, --ipv4          仅测 IPv4
@@ -54,7 +58,7 @@ CN TCP Quality V1
 
 说明：
   双栈 TCP 主表覆盖北京、上海、广东、安徽、江苏三网。
-  单线程吞吐仅对存在真实上传／下载端点的线路显示结果。
+  单线程吞吐会逐项测试五省三网双栈；端点不支持时明确显示原因。
   不上传报告，不采集公网 IP，不参与排行榜。
 EOF
 }
@@ -112,7 +116,7 @@ parse_args() {
   done
 
   [ "$QUICK" -eq 0 ] || {
-    COUNT=8
+    COUNT=5
     SPEED_SECONDS=3
     SPEED_BYTES=$((64 * 1024 * 1024))
   }
@@ -216,11 +220,23 @@ normalize_remote_nodes() {
 
 load_nodes() {
   local remote="$WORK_DIR/nodes.remote.tsv" normalized="$WORK_DIR/nodes.normalized.tsv"
+  local tos_remote="$WORK_DIR/nodes.tos.remote.tsv" tos_normalized="$WORK_DIR/nodes.tos.normalized.tsv"
+  local builtin="$WORK_DIR/nodes.builtin.tsv" builtin_normalized="$WORK_DIR/nodes.builtin.normalized.tsv"
   NODE_SOURCE="builtin-fallback"
   if [ "$SELF_TEST" -eq 0 ] && curl -fsSL --retry 2 --connect-timeout 6 --max-time 25 "$NODE_API" -o "$remote" 2>/dev/null; then
     normalize_remote_nodes "$remote" "$normalized"
     if [ "$(awk -F '\t' '$1=="cdn"{n++} END{print n+0}' "$normalized")" -ge 30 ]; then
       cp "$normalized" "$NODE_FILE"
+      if curl -fsSL --retry 2 --connect-timeout 6 --max-time 25 \
+          "${NODE_API%%\?*}?format=tsv&scope=tos" -o "$tos_remote" 2>/dev/null; then
+        normalize_remote_nodes "$tos_remote" "$tos_normalized"
+        awk -F '\t' '$1=="tos"' "$tos_normalized" >> "$NODE_FILE"
+      fi
+      if [ "$(awk -F '\t' '$1=="tos"&&$2=="4"{n++}END{print n+0}' "$NODE_FILE")" -lt 9 ]; then
+        write_builtin_nodes "$builtin"
+        normalize_remote_nodes "$builtin" "$builtin_normalized"
+        awk -F '\t' '$1=="tos"' "$builtin_normalized" >> "$NODE_FILE"
+      fi
       NODE_SOURCE="dynamic-api"
       return 0
     fi
@@ -255,13 +271,13 @@ prepare_probe_plan() {
 
 ipv6_route_available() {
   local ip6
-  ip6=$(awk -F '\t' '$3=="6" && $8!="-" {print $8; exit}' "$PLAN_FILE")
+  ip6=$(awk -F '\t' '$3=="6" && $7!="-" {print $7; exit}' "$PLAN_FILE")
   [ -n "$ip6" ] && ip -6 route get "$ip6" >/dev/null 2>&1
 }
 
 calc_metrics() {
-  local values="$1" count="$2" received avg jitter min max p95 loss sorted idx
-  received=$(wc -l < "$values" | tr -d ' ')
+  local values="$1" count="$2" received="${3:-}" avg jitter min max p95 loss sorted idx
+  [ -n "$received" ] || received=$(wc -l < "$values" | tr -d ' ')
   loss=$(awk -v sent="$count" -v recv="$received" 'BEGIN{printf "%.2f", (sent-recv)*100/sent}')
   if [ "$received" -eq 0 ]; then
     printf '%s\t-\t-\t-\t-\t-\t0' "$loss"
@@ -285,7 +301,7 @@ write_skip_result() {
 
 probe_node() {
   local idx="$1" family="$2" prov="$3" isp="$4" host="$5" ipaddr="$6" port="$7"
-  local raw="$WORK_DIR/nping.$idx.log" values="$WORK_DIR/rtt.$idx" metrics status rc=0
+  local raw="$WORK_DIR/nping.$idx.log" values="$WORK_DIR/rtt.$idx" metrics status rc=0 sent received loss
   : > "$values"
   if [ "$ipaddr" = "-" ]; then
     write_skip_result "$idx" "$family" "$prov" "$isp" "$host" "$ipaddr" "无节点"
@@ -296,17 +312,31 @@ probe_node() {
     return
   fi
   if [ "$family" = "6" ]; then
-    timeout "$((COUNT * 2 + 10))" nping -6 --tcp --flags syn -p "$port" -c "$COUNT" --delay "${DELAY_MS}ms" "$ipaddr" > "$raw" 2>&1 || rc=$?
+    timeout "$((COUNT * 2 + 15))" nping -6 --tcp --flags syn -p "$port" -c "$COUNT" --delay "${DELAY_SECONDS}s" "$ipaddr" > "$raw" 2>&1 || rc=$?
   else
-    timeout "$((COUNT * 2 + 10))" nping --tcp --flags syn -p "$port" -c "$COUNT" --delay "${DELAY_MS}ms" "$ipaddr" > "$raw" 2>&1 || rc=$?
+    timeout "$((COUNT * 2 + 15))" nping --tcp --flags syn -p "$port" -c "$COUNT" --delay "${DELAY_SECONDS}s" "$ipaddr" > "$raw" 2>&1 || rc=$?
   fi
   grep -oE 'rtt[=:][[:space:]]*[0-9]+([.][0-9]+)?ms' "$raw" 2>/dev/null | sed -E 's/.*[=:][[:space:]]*([0-9.]+)ms/\1/' > "$values" || true
-  metrics=$(calc_metrics "$values" "$COUNT")
+  sent=$(sed -nE 's/.*Raw packets sent:[[:space:]]*([0-9]+).*/\1/p' "$raw" | tail -1)
+  received=$(sed -nE 's/.*Rcvd:[[:space:]]*([0-9]+).*/\1/p' "$raw" | tail -1)
+  [[ "$sent" =~ ^[0-9]+$ ]] || sent="$COUNT"
+  [[ "$received" =~ ^[0-9]+$ ]] || received=$(wc -l < "$values" | tr -d ' ')
+  if [ "$received" -gt 0 ] && [ ! -s "$values" ]; then
+    sed -nE 's/.*Avg rtt:[[:space:]]*([0-9.]+).*/\1/p' "$raw" | tail -1 > "$values"
+  fi
+  metrics=$(calc_metrics "$values" "$sent" "$received")
+  loss=${metrics%%$'\t'*}
   status="正常"
-  [ "$(wc -l < "$values")" -gt 0 ] || status="不可达"
+  [ "$received" -gt 0 ] || status="不可达"
+  if [ "$received" -gt 0 ]; then
+    awk -v v="$loss" 'BEGIN{exit !(v>20)}' && status="严重丢包"
+    if [ "$status" = "正常" ]; then
+      awk -v v="$loss" 'BEGIN{exit !(v>3)}' && status="丢包"
+    fi
+  fi
   [ "$rc" -eq 124 ] && status="超时"
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$family" "$prov" "$isp" "$metrics" "$status" "$host" "$ipaddr" "$COUNT" > "$RESULT_DIR/$idx.tsv"
+    "$family" "$prov" "$isp" "$metrics" "$status" "$host" "$ipaddr" "$sent" > "$RESULT_DIR/$idx.tsv"
 }
 
 run_tcp_probes() {
@@ -466,38 +496,184 @@ parse_curl_metric() {
   printf '%s|%s|%s|%s' "$mbps" "$latency" "$retrans" "$status"
 }
 
+speedtest_server_ids() {
+  case "$1|$2" in
+    北京\|电信) printf '27377 4751' ;;
+    北京\|联通) printf '43752 5145 5505 18462' ;;
+    北京\|移动) printf '25858 4713' ;;
+    上海\|电信) printf '3633 28139' ;;
+    上海\|联通) printf '24447 21005 5083' ;;
+    上海\|移动) printf '25637 30154 4665 16719 16803' ;;
+    广东\|电信) printf '27594 9151 10775 17251 5081' ;;
+    广东\|联通) printf '26678 3891 16192 10201' ;;
+    广东\|移动) printf '4515 6611 31520' ;;
+    安徽\|电信) printf '17145' ;;
+    安徽\|联通) printf '5724' ;;
+    安徽\|移动) printf '26404 4377' ;;
+    江苏\|电信) printf '5396 36663 26352 5316 5324 5317' ;;
+    江苏\|联通) printf '13704 5446' ;;
+    江苏\|移动) printf '16204 27249 21590 21530 21722 21845 26850' ;;
+    *) return 1 ;;
+  esac
+}
+
+discover_speedtest_sources() {
+  local target4 target6
+  target4=$(awk -F '\t' '$3=="4"&&$7!="-"{print $7;exit}' "$PLAN_FILE")
+  target6=$(awk -F '\t' '$3=="6"&&$7!="-"{print $7;exit}' "$PLAN_FILE")
+  if [ -z "$SOURCE_IPV4" ] && [ -n "$target4" ]; then
+    SOURCE_IPV4=$(ip -4 route get "$target4" 2>/dev/null | sed -nE 's/.*[[:space:]]src[[:space:]]+([^[:space:]]+).*/\1/p' | head -1)
+  fi
+  if [ -z "$SOURCE_IPV6" ] && [ -n "$target6" ]; then
+    SOURCE_IPV6=$(ip -6 route get "$target6" 2>/dev/null | sed -nE 's/.*[[:space:]]src[[:space:]]+([^[:space:]]+).*/\1/p' | head -1)
+  fi
+}
+
+install_speedtest_engine() {
+  local machine arch asset base archive checksums expected actual extracted
+  if [ -n "$SPEEDTEST_BIN" ] && [ -x "$SPEEDTEST_BIN" ]; then return 0; fi
+  if command -v speedtest-go >/dev/null 2>&1; then SPEEDTEST_BIN=$(command -v speedtest-go); return 0; fi
+  machine=$(uname -m)
+  case "$machine" in
+    x86_64|amd64) arch="x86_64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    armv7|armv7l) arch="armv7" ;;
+    i386|i486|i586|i686) arch="i386" ;;
+    s390x|riscv64|ppc64|ppc64le|loong64) arch="$machine" ;;
+    *) return 1 ;;
+  esac
+  command -v tar >/dev/null 2>&1 || return 1
+  command -v sha256sum >/dev/null 2>&1 || return 1
+  asset="speedtest-go_${SPEEDTEST_GO_VERSION}_Linux_${arch}.tar.gz"
+  base="https://github.com/showwin/speedtest-go/releases/download/v${SPEEDTEST_GO_VERSION}"
+  archive="$WORK_DIR/$asset"; checksums="$WORK_DIR/speedtest-go-checksums.txt"
+  curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 "$base/$asset" -o "$archive" || return 1
+  curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 "$base/checksums.txt" -o "$checksums" || return 1
+  expected=$(awk -v f="$asset" '$2==f{print $1;exit}' "$checksums")
+  [ -n "$expected" ] || return 1
+  actual=$(sha256sum "$archive" | awk '{print $1}')
+  [ "$actual" = "$expected" ] || return 1
+  mkdir -p "$WORK_DIR/speedtest-go"
+  tar -xzf "$archive" -C "$WORK_DIR/speedtest-go" || return 1
+  extracted=$(find "$WORK_DIR/speedtest-go" -maxdepth 2 -type f -name speedtest -print | head -1)
+  [ -n "$extracted" ] || return 1
+  chmod +x "$extracted"
+  SPEEDTEST_BIN="$extracted"
+}
+
+monitor_speedtest_pid() {
+  local pid="$1" out="$2"
+  : > "$out"
+  while kill -0 "$pid" 2>/dev/null; do
+    ss -tinp 2>/dev/null | awk -v needle="pid=$pid," '
+      /^[^[:space:]]/ {keep=index($0,needle)>0; next}
+      keep {print}
+    ' >> "$out" || true
+    sleep 0.1
+  done
+}
+
+json_number() {
+  local key="$1" file="$2"
+  grep -oE "\"${key}\":[-+0-9.eE]+" "$file" 2>/dev/null | head -1 | cut -d: -f2
+}
+
+run_speedtest_go_row() {
+  local family="$1" prov="$2" isp="$3" source ids id json sslog pid monitor_pid rc dl up latency retrans args=()
+  if [ "$family" = "4" ]; then source="$SOURCE_IPV4"; else source="$SOURCE_IPV6"; fi
+  [ -n "$source" ] || {
+    printf '%s' "-|-|-|-|无本地IPv${family}|speedtest-go"
+    return
+  }
+  install_speedtest_engine || { printf '%s' '-|-|-|-|测速核心安装失败|speedtest-go'; return; }
+  ids=$(speedtest_server_ids "$prov" "$isp" 2>/dev/null || true)
+  [ -n "$ids" ] || { printf '%s' '-|-|-|-|无候选端点|speedtest-go'; return; }
+  [ "$QUICK" -eq 0 ] || args+=(--saving-mode)
+  for id in $ids; do
+    json="$WORK_DIR/speedtest-${family}-${prov}-${isp}-${id}.json"
+    sslog="$WORK_DIR/speedtest-${family}-${prov}-${isp}-${id}.ss"
+    timeout 90 "$SPEEDTEST_BIN" --server="$id" --source="$source" --thread=1 --json "${args[@]}" > "$json" 2>/dev/null & pid=$!
+    monitor_speedtest_pid "$pid" "$sslog" & monitor_pid=$!
+    wait "$pid"; rc=$?
+    wait "$monitor_pid" 2>/dev/null || true
+    [ "$rc" -eq 0 ] || continue
+    dl=$(json_number dl_speed "$json"); up=$(json_number ul_speed "$json"); latency=$(json_number latency "$json")
+    if [[ "$dl" =~ ^[-+0-9.eE]+$ ]] && [[ "$up" =~ ^[-+0-9.eE]+$ ]] &&
+       awk -v d="$dl" -v u="$up" 'BEGIN{exit !(d>0&&u>0)}'; then
+      dl=$(awk -v n="$dl" 'BEGIN{printf "%.1f",n*8/1000000}')
+      up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n*8/1000000}')
+      if [[ "$latency" =~ ^[-+0-9.eE]+$ ]]; then latency=$(awk -v n="$latency" 'BEGIN{printf "%.0f",n/1000000}'); else latency="-"; fi
+      retrans=$(retrans_percent_from_ss "$sslog")
+      printf '%s|%s|%s|%s|OK|speedtest.net#%s' "$retrans" "$up" "$dl" "$latency" "$id"
+      return
+    fi
+  done
+  printf '%s' '-|-|-|-|端点不可用或不支持该IP族|speedtest-go'
+}
+
+run_tos_speed_row() {
+  local prov="$1" isp="$2" line ipaddr region bucket work urc umeta uss drc dmeta dss
+  local up ulat retrans ustatus down dlat dummy dstatus latency
+  line=$(awk -F '\t' -v p="$prov" -v i="$isp" '$1=="tos"&&$2=="4"&&$3==p&&$4==i{print;exit}' "$NODE_FILE")
+  [ -n "$line" ] || { printf '%s' '-|-|-|-|无TOS端点|TOS'; return; }
+  ipaddr=$(printf '%s\n' "$line" | awk -F '\t' '{print $6}')
+  region=$(tos_region "$prov"); bucket=$(tos_bucket_host "$region")
+  work="$WORK_DIR/tos-${prov}-${isp}"
+  IFS='|' read -r urc umeta uss <<<"$(curl_probe upload "$bucket" "$ipaddr" "$work")"
+  IFS='|' read -r up ulat retrans ustatus <<<"$(parse_curl_metric upload "$urc" "$umeta" "$uss")"
+  IFS='|' read -r drc dmeta dss <<<"$(curl_probe download "$bucket" "$ipaddr" "$work")"
+  IFS='|' read -r down dlat dummy dstatus <<<"$(parse_curl_metric download "$drc" "$dmeta" "$dss")"
+  if [ "$ustatus" = "OK" ] && [ "$dstatus" = "OK" ]; then
+    latency="${ulat}/${dlat}"
+    printf '%s|%s|%s|%s|OK|TOS:%s' "$retrans" "$up" "$down" "$latency" "$ipaddr"
+  else
+    printf '%s' '-|-|-|-|TOS失败|TOS'
+  fi
+}
+
+print_speed_result_row() {
+  local family="$1" prov="$2" isp="$3" retrans="$4" up="$5" down="$6" latency="$7" status="$8" engine="$9"
+  local color="$GREEN"
+  [ "$status" = "OK" ] || color="$YELLOW"
+  printf '  '; printf '%b' "$CYAN"; pad_left 6 "IPv$family"; printf '%b' "$NC"
+  printf '  '; printf '%b' "$CYAN"; pad_left 12 "$prov$isp"; printf '%b' "$NC"
+  printf '  '; printf '%b' "$color"; pad_left 10 "$(metric_text "$retrans" '%')"; printf '%b' "$NC"
+  printf '  '; printf '%b' "$color"; pad_left 12 "$(metric_text "$up" 'Mbps')"; printf '%b' "$NC"
+  printf '  '; printf '%b' "$color"; pad_left 12 "$(metric_text "$down" 'Mbps')"; printf '%b' "$NC"
+  printf '  '; printf '%b' "$color"; pad_left 13 "$(metric_text "$latency" 'ms')"; printf '%b' "$NC"
+  printf '  '; printf '%b' "$color"; pad_left 24 "$status"; printf '%b\n' "$NC"
+  printf 'IPv%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$family" "$prov" "$isp" "$retrans" "$up" "$down" "$latency" "$status" "$engine" >> "$SPEED_CSV"
+}
+
 run_speedtests() {
-  local prov isp line ipaddr region bucket work updesc downdesc urc umeta uss drc dmeta dss
-  local up ulat retrans ustatus down dlat dummy dstatus sc rc_color speed_color
+  local family prov isp result retrans up down latency status engine
   SPEED_CSV="$OUTPUT_DIR/single-thread-speed.csv"
   SPEED_EXECUTED=1
-  printf '\xEF\xBB\xBF协议,省份,运营商,回程重传(%%),回程速度(Mbps),去程速度(Mbps),回程连接延迟(ms),去程连接延迟(ms),状态,IP\n' > "$SPEED_CSV"
-  echo -e "${BOLD}${CYAN}真实端点单线程测速${NC}"
-  echo -e "${DIM}仅显示具备 TOS 上传／下载能力的北京、上海、广东 IPv4；每方向最长 ${SPEED_SECONDS}s。${NC}"
+  printf '\xEF\xBB\xBF协议,省份,运营商,回程重传(%%),回程速度(Mbps),去程速度(Mbps),节点延迟(ms),状态,测速端点\n' > "$SPEED_CSV"
+  discover_speedtest_sources
+  echo -e "${BOLD}${CYAN}五省三网 IPv4／IPv6 单线程测速${NC}"
+  echo -e "${DIM}每个方向仅使用一个 TCP 连接；北上广 IPv4 优先 TOS，其余使用逐运营商测速端点。${NC}"
   echo
-  printf '  '; pad_left 12 'IPv4'; printf '  '; pad_left 10 '回程重传'; printf '  '; pad_left 12 '回程速度'; printf '  '; pad_left 12 '去程速度'; printf '  '; pad_left 10 '回程延迟'; printf '  '; pad_left 10 '去程延迟'; printf '\n'
-  for prov in 北京 上海 广东; do
-    selected_province "$prov" || continue
-    for isp in 电信 联通 移动; do
-      line=$(awk -F '\t' -v p="$prov" -v i="$isp" '$1=="tos" && $2=="4" && $3==p && $4==i {print;exit}' "$NODE_FILE")
-      if [ -z "$line" ]; then
-        printf 'IPv4,%s,%s,N/A,N/A,N/A,N/A,N/A,无真实端点,-\n' "$prov" "$isp" >> "$SPEED_CSV"
-        continue
-      fi
-      ipaddr=$(printf '%s\n' "$line" | awk -F '\t' '{print $6}')
-      region=$(tos_region "$prov"); bucket=$(tos_bucket_host "$region")
-      work="$WORK_DIR/speed-${prov}-${isp}"
-      IFS='|' read -r urc umeta uss <<<"$(curl_probe upload "$bucket" "$ipaddr" "$work")"
-      IFS='|' read -r up ulat retrans ustatus <<<"$(parse_curl_metric upload "$urc" "$umeta" "$uss")"
-      IFS='|' read -r drc dmeta dss <<<"$(curl_probe download "$bucket" "$ipaddr" "$work")"
-      IFS='|' read -r down dlat dummy dstatus <<<"$(parse_curl_metric download "$drc" "$dmeta" "$dss")"
-      sc="OK"; [ "$ustatus" = "OK" ] && [ "$dstatus" = "OK" ] || sc="部分失败"
-      printf 'IPv4,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$prov" "$isp" "$retrans" "$up" "$down" "$ulat" "$dlat" "$sc" "$ipaddr" >> "$SPEED_CSV"
-      printf '  '; printf '%b' "$CYAN"; pad_left 12 "$prov$isp"; printf '%b' "$NC"
-      rc_color=$(loss_color "$retrans"); printf '  '; printf '%b' "$rc_color"; if [ "$retrans" = "-" ]; then pad_left 10 '-'; else pad_left 10 "${retrans}%"; fi; printf '%b' "$NC"
-      speed_color="$GREEN"; [ "$up" = "failed" ] && speed_color="$RED"; printf '  '; printf '%b' "$speed_color"; pad_left 12 "$(metric_text "$up" 'Mbps')"; printf '%b' "$NC"
-      speed_color="$GREEN"; [ "$down" = "failed" ] && speed_color="$RED"; printf '  '; printf '%b' "$speed_color"; pad_left 12 "$(metric_text "$down" 'Mbps')"; printf '%b' "$NC"
-      printf '  '; pad_left 10 "$(metric_text "$ulat" 'ms')"; printf '  '; pad_left 10 "$(metric_text "$dlat" 'ms')"; printf '\n'
+  printf '  '; pad_left 6 '协议'; printf '  '; pad_left 12 '地区线路'; printf '  '; pad_left 10 '回程重传'; printf '  '; pad_left 12 '回程速度'; printf '  '; pad_left 12 '去程速度'; printf '  '; pad_left 13 '节点延迟'; printf '  '; pad_left 24 '状态'; printf '\n'
+  for family in 4 6; do
+    [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "$family" ] || continue
+    for prov in 北京 上海 广东 安徽 江苏; do
+      selected_province "$prov" || continue
+      for isp in 电信 联通 移动; do
+        if [ "$family" = "6" ] && [ "$IPV6_OK" -ne 1 ]; then
+          print_speed_result_row "$family" "$prov" "$isp" '-' '-' '-' '-' '本机无IPv6，跳过' '-'
+          continue
+        fi
+        result=""
+        if [ "$family" = "4" ] && [[ "$prov" =~ ^(北京|上海|广东)$ ]]; then
+          result=$(run_tos_speed_row "$prov" "$isp")
+          IFS='|' read -r retrans up down latency status engine <<< "$result"
+          [ "$status" = "OK" ] || result=""
+        fi
+        [ -n "$result" ] || result=$(run_speedtest_go_row "$family" "$prov" "$isp")
+        IFS='|' read -r retrans up down latency status engine <<< "$result"
+        print_speed_result_row "$family" "$prov" "$isp" "$retrans" "$up" "$down" "$latency" "$status" "$engine"
+      done
     done
     echo
   done
@@ -568,14 +744,10 @@ main() {
   echo
   show_tcp_results
   if [ "$RUN_SPEED" -eq 1 ]; then
-    if [ "$ONLY_FAMILY" = "6" ]; then
-      echo -e "${YELLOW}[!] 已选择仅 IPv6；当前没有可验证的三网 IPv6 吞吐端点，跳过单线程速度。${NC}"
-    else
-      run_speedtests
-    fi
+    run_speedtests
   fi
   write_summary
-  echo -e "${DIM}注：吞吐速度只对真实上传／下载端点输出；N/A 不代表线路故障。${NC}"
+  echo -e "${DIM}注：30 组测速均逐项执行；端点或 IP 族不受支持时会明确标注，不生成假 Mbps。${NC}"
   echo -e "${GREEN}结果已保存：$OUTPUT_DIR${NC}"
 }
 
