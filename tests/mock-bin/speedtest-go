@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+cat <<'EOF'
+{"servers":[{"id":"mock","latency":50000000,"dl_speed":12500000,"ul_speed":6250000}]}
+EOF
