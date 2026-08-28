@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
-cat <<'EOF'
-{"servers":[{"id":"mock","latency":50000000,"dl_speed":12500000,"ul_speed":6250000}]}
-EOF
+if [ -n "${MOCK_SPEEDTEST_ARGS_FILE:-}" ]; then
+  printf '%s\n' "$*" >> "$MOCK_SPEEDTEST_ARGS_FILE"
+fi
+if [ "${MOCK_DYNAMIC_FAIL:-0}" = "1" ] && [[ " $* " == *" --location="* ]]; then
+  exit 1
+fi
+if [ "${MOCK_SPEEDTEST_LOW:-0}" = "1" ]; then
+  printf '%s\n' '{"servers":[{"id":"mock-low","latency":50000000,"dl_speed":1000,"ul_speed":1000}]}'
+else
+  printf '%s\n' '{"servers":[{"id":"mock","latency":50000000,"dl_speed":12500000,"ul_speed":6250000}]}'
+fi
