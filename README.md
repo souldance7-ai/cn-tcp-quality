@@ -14,6 +14,8 @@
 - 北京／上海／广东 IPv4 优先使用真实 TOS 端点；其余组合同时从 Ookla 当前目录与每日更新的 Speedtest.cn 国内目录选择同省、同运营商候选
 - IPv6 不调用 Speedtest 测速核心：先验证候选域名 AAAA，再用 `curl -6` 直连端点的下载与上传接口
 - 直连测速优先原样使用目录公布的 `downloadUrl`／`uploadUrl`，再兼容新版 `/download`、`/upload` 和传统 `random*.jpg`、`upload.php` 协议
+- Speedtest.cn 端点自动跟随 HTTP 跳转并使用浏览器 User-Agent；上传优先使用原始二进制请求体，再回退传统 `content1=` 表单
+- IPv6 解析会明确排除 `::ffff:x.x.x.x` IPv4-mapped 地址，避免把只有 A 记录的端点误报为可用 IPv6
 - 每一条候选端点的地址族解析、下载及上传结果另存 `endpoint-audit.csv`，可直接定位“目录没有端点”“没有 AAAA”或“端点拒绝传输”
 - TOS 主端点失败时自动轮询同省同运营商备用 IP，再回退直连 HTTP；仅 IPv4 最后使用 Speedtest 双引擎兜底
 - TCP 探测和单线程测速均显示动态渐层进度条、百分比、完成数／总数及当前线路
@@ -42,10 +44,17 @@ bash <(curl -fsSL --retry 3 "https://raw.githubusercontent.com/souldance7-ai/cn-
 bash <(curl -fsSL --retry 3 "https://raw.githubusercontent.com/souldance7-ai/cn-tcp-quality/main/cn-tcp-quality.sh") --quick --speed
 ```
 
+仅重新测试单线程端点、跳过 TCP 品质探测：
+
+```bash
+bash <(curl -fsSL --retry 3 "https://raw.githubusercontent.com/souldance7-ai/cn-tcp-quality/main/cn-tcp-quality.sh") --speed-only
+```
+
 ## 参数
 
 ```text
 --speed             追加五省三网 IPv4／IPv6 单线程上下行测速
+--speed-only        仅执行单线程测速，跳过 TCP 品质表
 --quick             每节点 10 包，测速使用节流模式
 -c, --count N       每个节点发包数，默认 30
 -p, --parallel N    并行节点数，默认 6
