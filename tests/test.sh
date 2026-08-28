@@ -37,7 +37,7 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(awk -F, 'NR>1 && $11==60{n++}END{print n+0}' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
 [ "$(grep -c ',1.67,' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
-grep -q 'CN TCP.*Network Quality Benchmark (V1.8.1)' "$TEST_TMP/adaptive-terminal.txt"
+grep -q 'CN TCP.*Network Quality Benchmark (V1.8.2)' "$TEST_TMP/adaptive-terminal.txt"
 grep -q '██████╗.*███╗.*██╗' "$TEST_TMP/adaptive-terminal.txt"
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
@@ -136,4 +136,13 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 [ "$(grep -c ',OK,KnownHefei#26404-' "$TEST_TMP/hefei-static/single-thread-speed.csv")" -eq 1 ]
 [ "$(grep -c ',KnownHefei,.*,双向,成功' "$TEST_TMP/hefei-static/endpoint-audit.csv")" -eq 3 ]
 
-echo "TEST PASS: syntax, banner, adaptive loss sampling, IPv6 L2 fallback, Hefei static direct endpoints, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, low-speed guard, and 30-row matrix."
+MOCK_OOKLA_ALIAS=1 \
+CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
+CN_TCP_SPEEDTEST_SOURCE6="2001:db8::10" \
+PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
+  --province ah --quick --speed-only --no-color --output "$TEST_TMP/ookla-alias" >/dev/null
+
+[ "$(grep -c ',OK,OoklaAlias#' "$TEST_TMP/ookla-alias/single-thread-speed.csv")" -eq 6 ]
+[ "$(grep -c ',OoklaAlias,.*,双向,成功' "$TEST_TMP/ookla-alias/endpoint-audit.csv")" -eq 6 ]
+
+echo "TEST PASS: syntax, banner, adaptive loss sampling, IPv6 L2 fallback, Anhui city fallback, Ookla dual-stack aliases, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, low-speed guard, and 30-row matrix."

@@ -6,6 +6,9 @@ case "$host" in
   speedtest1.ah163.com|speedtest2.ah.chinamobile.com|4gtest.ahydnet.com)
     [ "${MOCK_HEFEI_STATIC:-0}" = "1" ] || exit 2
     ;;
+  *.prod.hosts.ooklaserver.net)
+    [ "${MOCK_OOKLA_ALIAS:-0}" = "1" ] || exit 2
+    ;;
   *) exit 2 ;;
 esac
 case "$mode" in

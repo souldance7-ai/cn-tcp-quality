@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.8.1"
+VERSION="1.8.2"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 COUNT=30
@@ -902,6 +902,7 @@ known_direct_http_candidates() {
       ;;
     移动)
       printf '%s\n' \
+        $'34035-huainan-8080\t中国移动安徽分公司\t淮南\thttp://speedtest1.ah.chinamobile.com:8080/speedtest/upload.php\tspeedtest1.ah.chinamobile.com\t8080\thttp://speedtest1.ah.chinamobile.com:8080\thttp://speedtest1.ah.chinamobile.com:8080/speedtest\t0\thttp://speedtest1.ah.chinamobile.com:8080/speedtest/random4000x4000.jpg\tKnownAnhui' \
         $'26404-speedtest-8080\t中国移动安徽分公司\t合肥\thttp://speedtest2.ah.chinamobile.com:8080/speedtest/upload.php\tspeedtest2.ah.chinamobile.com\t8080\thttp://speedtest2.ah.chinamobile.com:8080\thttp://speedtest2.ah.chinamobile.com:8080/speedtest\t0\thttp://speedtest2.ah.chinamobile.com:8080/speedtest/random4000x4000.jpg\tKnownHefei' \
         $'26404-ip-8080\t中国移动安徽分公司\t合肥\thttp://112.29.5.6:8080/speedtest/upload.php\t112.29.5.6\t8080\thttp://112.29.5.6:8080\thttp://112.29.5.6:8080/speedtest\t0\thttp://112.29.5.6:8080/speedtest/random4000x4000.jpg\tKnownHefeiIP' \
         $'ahcm-alt-ip-8080\t中国移动安徽分公司\t合肥\thttp://112.29.5.58:8080/speedtest/upload.php\t112.29.5.58\t8080\thttp://112.29.5.58:8080\thttp://112.29.5.58:8080/speedtest\t0\thttp://112.29.5.58:8080/speedtest/random4000x4000.jpg\tKnownHefeiIP' \
@@ -911,7 +912,33 @@ known_direct_http_candidates() {
   esac
 }
 
+# Ookla 为部分旧测速站保留 prod.hosts.ooklaserver.net 代理名。原运营商
+# 域名失效或对境外来源丢包时，代理名可能仍可解析／连接；若代理名具有
+# 原生 AAAA，也可用于 IPv6。测速仍逐项验证真实下载和上传，不凭目录造数。
+known_ookla_alias_candidates() {
+  local prov="$1" isp="$2"
+  [ "$prov" = "安徽" ] || return 0
+  case "$isp" in
+    电信)
+      printf '%s\n' \
+        $'17145-ookla-id\t中国电信安徽分公司\t合肥\thttps://server-17145.prod.hosts.ooklaserver.net:8080/upload\tserver-17145.prod.hosts.ooklaserver.net\t8080\thttps://server-17145.prod.hosts.ooklaserver.net:8080\thttps://server-17145.prod.hosts.ooklaserver.net:8080\t0\thttps://server-17145.prod.hosts.ooklaserver.net:8080/download\tOoklaAlias' \
+        $'17145-ookla-host\t中国电信安徽分公司\t合肥\thttps://speedtest1.ah163.com.prod.hosts.ooklaserver.net:8080/upload\tspeedtest1.ah163.com.prod.hosts.ooklaserver.net\t8080\thttps://speedtest1.ah163.com.prod.hosts.ooklaserver.net:8080\thttps://speedtest1.ah163.com.prod.hosts.ooklaserver.net:8080\t0\thttps://speedtest1.ah163.com.prod.hosts.ooklaserver.net:8080/download\tOoklaAlias'
+      ;;
+    联通)
+      printf '%s\n' \
+        $'5724-ookla-id\t中国联通安徽分公司\t合肥\thttps://server-5724.prod.hosts.ooklaserver.net:8080/upload\tserver-5724.prod.hosts.ooklaserver.net\t8080\thttps://server-5724.prod.hosts.ooklaserver.net:8080\thttps://server-5724.prod.hosts.ooklaserver.net:8080\t0\thttps://server-5724.prod.hosts.ooklaserver.net:8080/download\tOoklaAlias'
+      ;;
+    移动)
+      printf '%s\n' \
+        $'26404-ookla-id\t中国移动安徽分公司\t合肥\thttps://server-26404.prod.hosts.ooklaserver.net:8080/upload\tserver-26404.prod.hosts.ooklaserver.net\t8080\thttps://server-26404.prod.hosts.ooklaserver.net:8080\thttps://server-26404.prod.hosts.ooklaserver.net:8080\t0\thttps://server-26404.prod.hosts.ooklaserver.net:8080/download\tOoklaAlias' \
+        $'34035-ookla-id\t中国移动安徽分公司\t淮南\thttps://server-34035.prod.hosts.ooklaserver.net:8080/upload\tserver-34035.prod.hosts.ooklaserver.net\t8080\thttps://server-34035.prod.hosts.ooklaserver.net:8080\thttps://server-34035.prod.hosts.ooklaserver.net:8080\t0\thttps://server-34035.prod.hosts.ooklaserver.net:8080/download\tOoklaAlias' \
+        $'34035-ookla-host\t中国移动安徽分公司\t淮南\thttps://speedtest1.ah.chinamobile.com.prod.hosts.ooklaserver.net:8080/upload\tspeedtest1.ah.chinamobile.com.prod.hosts.ooklaserver.net\t8080\thttps://speedtest1.ah.chinamobile.com.prod.hosts.ooklaserver.net:8080\thttps://speedtest1.ah.chinamobile.com.prod.hosts.ooklaserver.net:8080\t0\thttps://speedtest1.ah.chinamobile.com.prod.hosts.ooklaserver.net:8080/download\tOoklaAlias'
+      ;;
+  esac
+}
+
 all_direct_http_candidates() {
+  known_ookla_alias_candidates "$1" "$2" 2>/dev/null || true
   known_direct_http_candidates "$1" "$2" 2>/dev/null || true
   speedtest_http_candidates "$1" "$2" 2>/dev/null || true
   speedtest_cn_http_candidates "$1" "$2" 2>/dev/null || true
@@ -1010,7 +1037,11 @@ direct_failure_status() {
     7) printf '端口拒绝或不可达'; return ;;
     28)
       if [ "${bytes:-0}" -lt 1048576 ] 2>/dev/null; then
-        printf '%s超时' "$stage"
+        if [ "${bytes:-0}" -eq 0 ] 2>/dev/null && [ "${http:-000}" = "000" ]; then
+          printf '连接超时'
+        else
+          printf '%s超时' "$stage"
+        fi
         return
       fi
       ;;
@@ -1032,10 +1063,14 @@ direct_failure_status() {
 
 compact_speed_status() {
   case "$1" in
-    候选端点无IPv4地址) printf '无IPv4地址' ;;
-    候选端点无IPv6地址) printf '无IPv6地址' ;;
-    端点不可用或不支持该IP族) printf '核心不可用' ;;
+    候选端点无IPv4地址) printf '无A记录' ;;
+    候选端点无IPv6地址) printf '无AAAA' ;;
+    未发现同省同运营商IPv4端点) printf '无同省IPv4端点' ;;
+    未发现同省同运营商IPv6端点) printf '无同省IPv6端点' ;;
+    连接超时|下载超时|上传超时) printf '超时' ;;
+    端点不可用或不支持该IP族) printf '核心失败' ;;
     测速低于0.1Mbps) printf '核心低于0.1Mbps' ;;
+    仅下载可用：*) printf '仅下载/上传失败' ;;
     *) printf '%s' "$1" ;;
   esac
 }
@@ -1151,7 +1186,7 @@ speedtest_server_ids() {
     广东\|移动) printf '4515 6611 31520' ;;
     安徽\|电信) printf '17145' ;;
     安徽\|联通) printf '5724' ;;
-    安徽\|移动) printf '26404 4377' ;;
+    安徽\|移动) printf '26404 34035 4377' ;;
     江苏\|电信) printf '5396 36663 26352 5316 5324 5317' ;;
     江苏\|联通) printf '13704 5446' ;;
     江苏\|移动) printf '16204 27249 21590 21530 21722 21845 26850' ;;
@@ -1391,15 +1426,16 @@ run_tos_speed_row() {
 
 print_speed_result_row() {
   local family="$1" prov="$2" isp="$3" retrans="$4" up="$5" down="$6" latency="$7" status="$8" engine="$9"
-  local color="$GREEN"
+  local color="$GREEN" display_status
   [ "$status" = "OK" ] || color="$YELLOW"
-  printf '  '; printf '%b' "$CYAN"; pad_left 6 "IPv$family"; printf '%b' "$NC"
-  printf '  '; printf '%b' "$CYAN"; pad_left 12 "$prov$isp"; printf '%b' "$NC"
-  printf '  '; printf '%b' "$color"; pad_left 10 "$(metric_text "$retrans" '%')"; printf '%b' "$NC"
-  printf '  '; printf '%b' "$color"; pad_left 12 "$(metric_text "$up" 'Mbps')"; printf '%b' "$NC"
-  printf '  '; printf '%b' "$color"; pad_left 12 "$(metric_text "$down" 'Mbps')"; printf '%b' "$NC"
-  printf '  '; printf '%b' "$color"; pad_left 13 "$(metric_text "$latency" 'ms')"; printf '%b' "$NC"
-  printf '  '; printf '%b' "$color"; pad_left 24 "$status"; printf '%b\n' "$NC"
+  display_status=$(compact_speed_status "$status")
+  printf '  '; printf '%b' "$CYAN"; pad_left 5 "IPv$family"; printf '%b' "$NC"
+  printf '  '; printf '%b' "$CYAN"; pad_left 10 "$prov$isp"; printf '%b' "$NC"
+  printf '  '; printf '%b' "$color"; pad_left 9 "$(metric_text "$retrans" '%')"; printf '%b' "$NC"
+  printf '  '; printf '%b' "$color"; pad_left 10 "$(metric_text "$up" 'Mbps')"; printf '%b' "$NC"
+  printf '  '; printf '%b' "$color"; pad_left 10 "$(metric_text "$down" 'Mbps')"; printf '%b' "$NC"
+  printf '  '; printf '%b' "$color"; pad_left 11 "$(metric_text "$latency" 'ms')"; printf '%b' "$NC"
+  printf '  '; printf '%b' "$color"; pad_left 18 "$display_status"; printf '%b\n' "$NC"
   printf 'IPv%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$family" "$prov" "$isp" "$retrans" "$up" "$down" "$latency" "$status" "$engine" >> "$SPEED_CSV"
 }
 
@@ -1417,7 +1453,7 @@ run_speedtests() {
   echo -e "${BOLD}${CYAN}五省三网 IPv4／IPv6 单线程测速${NC}"
   echo -e "${DIM}每个方向仅使用一个 TCP 连接；IPv6 直连候选端点的 AAAA，不使用 Speedtest 测速核心。${NC}"
   echo
-  printf '  '; pad_left 6 '协议'; printf '  '; pad_left 12 '地区线路'; printf '  '; pad_left 10 '回程重传'; printf '  '; pad_left 12 '回程速度'; printf '  '; pad_left 12 '去程速度'; printf '  '; pad_left 13 '节点延迟'; printf '  '; pad_left 24 '状态'; printf '\n'
+  printf '  '; pad_left 5 '协议'; printf '  '; pad_left 10 '地区线路'; printf '  '; pad_left 9 '回程重传'; printf '  '; pad_left 10 '回程速度'; printf '  '; pad_left 10 '去程速度'; printf '  '; pad_left 11 '节点延迟'; printf '  '; pad_left 18 '状态'; printf '\n'
   for family in 4 6; do
     [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "$family" ] || continue
     for prov in 北京 上海 广东 安徽 江苏; do
