@@ -3,10 +3,14 @@
 url=""
 output=""
 is_upload=0
+has_follow=0
+user_agent=""
 args=("$@")
 for ((i=0; i<${#args[@]}; i++)); do
   case "${args[$i]}" in
     -o) output="${args[$((i+1))]:-}" ;;
+    -L|--location) has_follow=1 ;;
+    -A|--user-agent) user_agent="${args[$((i+1))]:-}" ;;
     --data-binary) is_upload=1 ;;
     http://*|https://*) url="${args[$i]}" ;;
   esac
@@ -41,12 +45,22 @@ fi
 
 if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ]; } &&
    { [[ "$url" == *'/download?'* ]] || [[ "$url" == *'/random4000x4000.jpg?'* ]]; }; then
+  if [ "${MOCK_SPEEDTEST_CN_STRICT:-0}" = "1" ]; then
+    [ "$has_follow" -eq 1 ] || exit 22
+    [[ "$user_agent" == *'Mozilla/5.0'* ]] || exit 22
+  fi
   printf '200|12582912|12500000|0.050|1.000|1'
   exit 0
 fi
 
 if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ]; } &&
    [ "$is_upload" -eq 1 ] && [[ "$url" == *'/upload.php'* ]]; then
+  if [ "${MOCK_SPEEDTEST_CN_STRICT:-0}" = "1" ]; then
+    [ "$has_follow" -eq 1 ] || exit 22
+    [[ "$user_agent" == *'Mozilla/5.0'* ]] || exit 22
+    prefix=$(dd bs=1 count=9 2>/dev/null | od -An -tx1 | tr -d ' \n')
+    [ "$prefix" = "000000000000000000" ] || exit 22
+  fi
   printf '200|8388608|6250000|0.060|1.000|1'
   exit 0
 fi
