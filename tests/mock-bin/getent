@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+mode="${1:-}"
+host="${2:-}"
+case "$host" in
+  ct.example|cu.example|cm.example) ;;
+  *) exit 2 ;;
+esac
+case "$mode" in
+  ahostsv4) printf '198.51.100.20 STREAM %s\n' "$host" ;;
+  ahostsv6) printf '2001:db8::20 STREAM %s\n' "$host" ;;
+  *) exit 2 ;;
+esac
