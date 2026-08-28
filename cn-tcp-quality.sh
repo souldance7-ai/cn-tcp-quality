@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.6.0"
+VERSION="1.7.0"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 COUNT=30
@@ -14,6 +14,7 @@ COUNT_EXPLICIT=0
 AUTO_RECHECK_COUNT=60
 PARALLEL=6
 RUN_SPEED=0
+SPEED_ONLY=0
 SPEED_EXECUTED=0
 SPEED_SECONDS=8
 SPEED_BYTES=$((256 * 1024 * 1024))
@@ -57,6 +58,7 @@ CN TCP Quality V1
 
 选项：
   --speed             追加五省三网 IPv4／IPv6 单线程上下行测速（流量较大）
+  --speed-only        仅执行单线程测速，跳过 TCP 品质表，便于快速复测端点
   --quick             快速模式：每节点 10 包，测速使用节流模式
   -c, --count N       每个 TCP 节点发包数，默认 30，范围 3-100
   -p, --parallel N    并行节点数，默认 6，范围 1-15
@@ -102,6 +104,7 @@ parse_args() {
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --speed) RUN_SPEED=1; shift ;;
+      --speed-only) RUN_SPEED=1; SPEED_ONLY=1; shift ;;
       --quick) QUICK=1; shift ;;
       -4|--ipv4) ONLY_FAMILY=4; shift ;;
       -6|--ipv6) ONLY_FAMILY=6; shift ;;
@@ -748,7 +751,7 @@ PY
   # 过滤后反而会把可用的 IPv6 候选排除。
   url="https://www.speedtest.net/api/js/servers?engine=js&limit=200&lat=${lat}&lon=${lon}"
   curl -fsSL --retry 2 --connect-timeout 8 --max-time 30 \
-    -A 'Mozilla/5.0 CN-TCP-Quality/1.5' "$url" -o "$file" 2>/dev/null || return 1
+    -A 'Mozilla/5.0 CN-TCP-Quality/1.7' "$url" -o "$file" 2>/dev/null || return 1
   python3 - "$file" <<'PY' >/dev/null 2>&1
 import json, sys
 data = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -825,7 +828,7 @@ ensure_speedtest_cn_catalog() {
     return 0
   fi
   curl -fsSL --retry 2 --connect-timeout 8 --max-time 30 \
-    -A 'Mozilla/5.0 CN-TCP-Quality/1.6' "$SPEEDTEST_CN_CATALOG_URL" -o "$file" 2>/dev/null || return 1
+    -A 'Mozilla/5.0 CN-TCP-Quality/1.7' "$SPEEDTEST_CN_CATALOG_URL" -o "$file" 2>/dev/null || return 1
   head -1 "$file" 2>/dev/null | grep -q '^id,active,https,' || return 1
   printf '%s' "$file"
 }
@@ -889,7 +892,10 @@ resolve_speedtest_host() {
     getent ahostsv4 "$host" 2>/dev/null | awk '$1 !~ /:/&&!seen[$1]++{print $1;exit}'
   else
     [[ "$host" == *:* ]] && { printf '%s' "${host#[}" | sed 's/]$//'; return; }
-    getent ahostsv6 "$host" 2>/dev/null | awk '$1 ~ /:/&&!seen[$1]++{print $1;exit}'
+    # glibc 可能把仅有 A 记录的主机合成为 ::ffff:x.x.x.x。那是 IPv4-mapped
+    # 地址，不代表端点具有原生 IPv6，不能交给 curl -6 冒充 AAAA。
+    getent ahostsv6 "$host" 2>/dev/null |
+      awk 'tolower($1) !~ /^::ffff:/ && $1 ~ /:/ && !seen[$1]++ {print $1;exit}'
   fi
 }
 
@@ -898,7 +904,8 @@ direct_http_download() {
   local meta="$work.download.meta" err="$work.download.err" sslog="$work.download.ss"
   local resolve_ip="$ipaddr" pid monitor_pid rc=0
   [ "$family" = "4" ] || resolve_ip="[$ipaddr]"
-  curl "-$family" --interface "$source" --noproxy '*' --http1.1 -k -sS \
+  curl "-$family" --interface "$source" --noproxy '*' --http1.1 -k -sS -L \
+    -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 CN-TCP-Quality/1.7' \
     --connect-timeout 5 --max-time "$SPEED_SECONDS" --resolve "$host:$port:$resolve_ip" \
     -H 'Cache-Control: no-cache' -o /dev/null \
     -w '%{http_code}|%{size_download}|%{speed_download}|%{time_connect}|%{time_total}|%{num_connects}' \
@@ -910,7 +917,7 @@ direct_http_download() {
 }
 
 direct_http_upload() {
-  local family="$1" source="$2" host="$3" port="$4" ipaddr="$5" url="$6" work="$7"
+  local family="$1" source="$2" host="$3" port="$4" ipaddr="$5" url="$6" work="$7" payload_mode="${8:-form}"
   local meta="$work.upload.meta" err="$work.upload.err" sslog="$work.upload.ss"
   local resolve_ip="$ipaddr" pid monitor_pid rc=0 body_bytes
   [ "$family" = "4" ] || resolve_ip="[$ipaddr]"
@@ -919,21 +926,46 @@ direct_http_upload() {
     # curl 是测速结果的权威进程。测试端提早结束时，数据生成器可能收到
     # SIGPIPE；这里明确返回 curl 状态，避免把成功上传误判为失败。
     set +o pipefail
-    {
-      printf 'content1='
-      head -c "$((body_bytes - 9))" /dev/zero 2>/dev/null
-    } | curl "-$family" --interface "$source" --noproxy '*' --http1.1 -k -sS \
-      --connect-timeout 5 --max-time "$SPEED_SECONDS" --resolve "$host:$port:$resolve_ip" \
-      -X POST -H "Content-Length: $body_bytes" -H 'Content-Type: application/x-www-form-urlencoded' -H 'Expect:' \
-      --data-binary @- -o /dev/null \
-      -w '%{http_code}|%{size_upload}|%{speed_upload}|%{time_connect}|%{time_total}|%{num_connects}' \
-      "$url" > "$meta" 2> "$err"
-    exit "${PIPESTATUS[1]}"
+    if [ "$payload_mode" = "raw" ]; then
+      head -c "$body_bytes" /dev/zero 2>/dev/null |
+        curl "-$family" --interface "$source" --noproxy '*' --http1.1 -k -sS -L \
+          -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 CN-TCP-Quality/1.7' \
+          --connect-timeout 5 --max-time "$SPEED_SECONDS" --resolve "$host:$port:$resolve_ip" \
+          -X POST -H "Content-Length: $body_bytes" -H 'Expect:' \
+          --data-binary @- -o /dev/null \
+          -w '%{http_code}|%{size_upload}|%{speed_upload}|%{time_connect}|%{time_total}|%{num_connects}' \
+          "$url" > "$meta" 2> "$err"
+      exit "${PIPESTATUS[1]}"
+    else
+      {
+        printf 'content1='
+        head -c "$((body_bytes - 9))" /dev/zero 2>/dev/null
+      } | curl "-$family" --interface "$source" --noproxy '*' --http1.1 -k -sS -L \
+          -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 CN-TCP-Quality/1.7' \
+          --connect-timeout 5 --max-time "$SPEED_SECONDS" --resolve "$host:$port:$resolve_ip" \
+          -X POST -H "Content-Length: $body_bytes" -H 'Content-Type: application/x-www-form-urlencoded' -H 'Expect:' \
+          --data-binary @- -o /dev/null \
+          -w '%{http_code}|%{size_upload}|%{speed_upload}|%{time_connect}|%{time_total}|%{num_connects}' \
+          "$url" > "$meta" 2> "$err"
+      exit "${PIPESTATUS[1]}"
+    fi
   ) & pid=$!
   monitor_ss "$pid" "$ipaddr" "$sslog" & monitor_pid=$!
   wait "$pid" || rc=$?
   wait "$monitor_pid" 2>/dev/null || true
   printf '%s|%s|%s' "$rc" "$meta" "$sslog"
+}
+
+direct_failure_detail() {
+  local rc="$1" meta_file="$2" err_file="$3" http="-" bytes="-" error="-" rest
+  if [ -s "$meta_file" ]; then
+    IFS='|' read -r http bytes rest < "$meta_file" 2>/dev/null || true
+  fi
+  if [ -s "$err_file" ]; then
+    error=$(tr ',\r\n' '   ' < "$err_file" | cut -c1-100)
+    [ -n "$error" ] || error="-"
+  fi
+  printf '失败(rc=%s;http=%s;bytes=%s;curl=%s)' "$rc" "${http:--}" "${bytes:--}" "$error"
 }
 
 parse_direct_http_metric() {
@@ -961,7 +993,7 @@ run_direct_http_speed_row() {
   local id sponsor city upload_url host port origin base distance download_hint catalog_source
   local ipaddr resolve_seen=0 tested=0
   local work drc dmeta dss down dlat dummy dstatus urc umeta uss up ulat retrans ustatus
-  local download_url download_hint_url upload_test_url status latency saved_down='' saved_dlat='' saved_engine=''
+  local download_url download_hint_url upload_test_url upload_mode upload_modes failure status latency saved_down='' saved_dlat='' saved_engine=''
   if [ "$family" = "4" ]; then source="$SOURCE_IPV4"; else source="$SOURCE_IPV6"; fi
   [ -n "$source" ] || { printf '%s' "-|-|-|-|无本地IPv${family}|direct-http"; return; }
   while IFS=$'\t' read -r id sponsor city upload_url host port origin base distance download_hint catalog_source; do
@@ -992,27 +1024,30 @@ run_direct_http_speed_row() {
       [ "$dstatus" = "OK" ] && break
     done
     if [ "$dstatus" != "OK" ]; then
-      printf 'IPv%s,%s,%s,%s,%s,%s,%s,下载,失败\n' \
-        "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" >> "$SPEED_AUDIT_CSV"
+      failure=$(direct_failure_detail "${drc:-1}" "${dmeta:-/dev/null}" "$work.download.err")
+      printf 'IPv%s,%s,%s,%s,%s,%s,%s,下载,%s\n' \
+        "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" "$failure" >> "$SPEED_AUDIT_CSV"
       continue
     fi
     tested=$((tested + 1))
     saved_down="$down"; saved_dlat="$dlat"; saved_engine="${catalog_source:-DirectHTTP}#${id}:${host}"
-    for upload_test_url in \
-      "$upload_url" \
-      "${origin}/upload?guid=cn-tcp-$RANDOM"; do
-      IFS='|' read -r urc umeta uss <<<"$(direct_http_upload "$family" "$source" "$host" "$port" "$ipaddr" "$upload_test_url" "$work")"
-      IFS='|' read -r up ulat retrans ustatus <<<"$(parse_direct_http_metric upload "$urc" "$umeta" "$uss")"
-      if [ "$ustatus" = "OK" ]; then
-        latency="${ulat}/${dlat}"
-        printf 'IPv%s,%s,%s,%s,%s,%s,%s,双向,成功\n' \
-          "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" >> "$SPEED_AUDIT_CSV"
-        printf '%s|%s|%s|%s|OK|%s' "$retrans" "$up" "$down" "$latency" "$saved_engine"
-        return
-      fi
+    if [ "$catalog_source" = "SpeedtestCN" ]; then upload_modes="raw form"; else upload_modes="form raw"; fi
+    for upload_test_url in "$upload_url" "${origin}/upload?guid=cn-tcp-$RANDOM"; do
+      for upload_mode in $upload_modes; do
+        IFS='|' read -r urc umeta uss <<<"$(direct_http_upload "$family" "$source" "$host" "$port" "$ipaddr" "$upload_test_url" "$work" "$upload_mode")"
+        IFS='|' read -r up ulat retrans ustatus <<<"$(parse_direct_http_metric upload "$urc" "$umeta" "$uss")"
+        if [ "$ustatus" = "OK" ]; then
+          latency="${ulat}/${dlat}"
+          printf 'IPv%s,%s,%s,%s,%s,%s,%s,双向,成功(%s)\n' \
+            "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" "$upload_mode" >> "$SPEED_AUDIT_CSV"
+          printf '%s|%s|%s|%s|OK|%s' "$retrans" "$up" "$down" "$latency" "$saved_engine"
+          return
+        fi
+      done
     done
-    printf 'IPv%s,%s,%s,%s,%s,%s,%s,上传,失败\n' \
-      "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" >> "$SPEED_AUDIT_CSV"
+    failure=$(direct_failure_detail "${urc:-1}" "${umeta:-/dev/null}" "$work.upload.err")
+    printf 'IPv%s,%s,%s,%s,%s,%s,%s,上传,%s\n' \
+      "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" "$failure" >> "$SPEED_AUDIT_CSV"
   done < <(all_direct_http_candidates "$prov" "$isp")
   if [ -n "$saved_down" ]; then
     printf '%s' "-|-|${saved_down}|${saved_dlat}|仅下载可用|${saved_engine}"
@@ -1330,9 +1365,13 @@ run_speedtests() {
 
 write_summary() {
   local report="$OUTPUT_DIR/README.txt" total normal skipped unreachable
-  total=$(find "$RESULT_DIR" -name '*.tsv' -type f | wc -l | tr -d ' ')
-  normal=$(awk -F '\t' '$11=="正常"{n++}END{print n+0}' "$RESULT_DIR"/*.tsv)
-  skipped=$(awk -F '\t' '$11=="跳过"{n++}END{print n+0}' "$RESULT_DIR"/*.tsv)
+  if find "$RESULT_DIR" -name '*.tsv' -type f -print -quit | grep -q .; then
+    total=$(find "$RESULT_DIR" -name '*.tsv' -type f | wc -l | tr -d ' ')
+    normal=$(awk -F '\t' '$11=="正常"{n++}END{print n+0}' "$RESULT_DIR"/*.tsv)
+    skipped=$(awk -F '\t' '$11=="跳过"{n++}END{print n+0}' "$RESULT_DIR"/*.tsv)
+  else
+    total=0; normal=0; skipped=0
+  fi
   unreachable=$((total-normal-skipped))
   {
     echo "$SCRIPT_NAME V$VERSION"
@@ -1344,7 +1383,7 @@ write_summary() {
     echo "单线程测速：$([ "$SPEED_EXECUTED" -eq 1 ] && echo 已执行 || echo 未执行，可使用 --speed)"
     echo
     echo "文件："
-    echo "  tcp-quality.csv"
+    [ "$total" -gt 0 ] && echo "  tcp-quality.csv"
     [ "$SPEED_EXECUTED" -eq 1 ] && echo "  single-thread-speed.csv"
     [ "$SPEED_EXECUTED" -eq 1 ] && echo "  endpoint-audit.csv"
   } > "$report"
@@ -1384,16 +1423,20 @@ main() {
   echo "节点来源：$NODE_SOURCE"
   echo "测试范围：$SELECTED_PROVINCES"
   echo "IPv6 状态：$([ "$IPV6_OK" -eq 1 ] && echo 可用 || echo 无可用默认路由，将自动跳过)"
-  if [ "$QUICK" -eq 0 ] && [ "$COUNT_EXPLICIT" -eq 0 ]; then
+  if [ "$SPEED_ONLY" -eq 1 ]; then
+    echo "运行模式：仅单线程测速（已跳过 TCP 品质探测）"
+  elif [ "$QUICK" -eq 0 ] && [ "$COUNT_EXPLICIT" -eq 0 ]; then
     echo "丢包采样：每节点 30 包；部分丢包自动补测至 60 包"
   else
     echo "丢包采样：每节点 $COUNT 包"
   fi
-  echo
-  echo -e "${DIM}正在探测 $(wc -l < "$PLAN_FILE") 个节点，请稍候……${NC}"
-  run_tcp_probes
-  echo
-  show_tcp_results
+  if [ "$SPEED_ONLY" -eq 0 ]; then
+    echo
+    echo -e "${DIM}正在探测 $(wc -l < "$PLAN_FILE") 个节点，请稍候……${NC}"
+    run_tcp_probes
+    echo
+    show_tcp_results
+  fi
   if [ "$RUN_SPEED" -eq 1 ]; then
     run_speedtests
   fi
