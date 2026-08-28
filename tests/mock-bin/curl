@@ -16,8 +16,10 @@ for ((i=0; i<${#args[@]}; i++)); do
   esac
 done
 
-if [ "${MOCK_HEFEI_STATIC:-0}" != "1" ] && [[ "$url" == *'112.122.10.26'* ]]; then
-  exit 22
+if [ "${MOCK_HEFEI_STATIC:-0}" != "1" ]; then
+  case "$url" in
+    *112.122.10.26*|*61.191.111.11*|*112.29.5.6*|*112.29.5.58*) exit 22 ;;
+  esac
 fi
 
 if [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] && [[ "$url" == *'/api/js/servers?'* ]]; then

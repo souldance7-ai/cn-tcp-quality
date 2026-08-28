@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.8.0"
+VERSION="1.8.1"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 COUNT=30
@@ -892,7 +892,9 @@ known_direct_http_candidates() {
       printf '%s\n' \
         $'17145-ccspt11-8080\t中国电信安徽分公司\t合肥\thttp://speedtest1.ah163.com:8080/ccspt11/upload.php\tspeedtest1.ah163.com\t8080\thttp://speedtest1.ah163.com:8080\thttp://speedtest1.ah163.com:8080/ccspt11\t0\thttp://speedtest1.ah163.com:8080/ccspt11/random4000x4000.jpg\tKnownHefei' \
         $'17145-speedtest-8080\t中国电信安徽分公司\t合肥\thttp://speedtest1.ah163.com:8080/speedtest/upload.php\tspeedtest1.ah163.com\t8080\thttp://speedtest1.ah163.com:8080\thttp://speedtest1.ah163.com:8080/speedtest\t0\thttp://speedtest1.ah163.com:8080/speedtest/random4000x4000.jpg\tKnownHefei' \
-        $'17145-ccspt11-80\t中国电信安徽分公司\t合肥\thttp://speedtest1.ah163.com/ccspt11/upload.php\tspeedtest1.ah163.com\t80\thttp://speedtest1.ah163.com:80\thttp://speedtest1.ah163.com/ccspt11\t0\thttp://speedtest1.ah163.com/ccspt11/random4000x4000.jpg\tKnownHefei'
+        $'17145-ccspt11-80\t中国电信安徽分公司\t合肥\thttp://speedtest1.ah163.com/ccspt11/upload.php\tspeedtest1.ah163.com\t80\thttp://speedtest1.ah163.com:80\thttp://speedtest1.ah163.com/ccspt11\t0\thttp://speedtest1.ah163.com/ccspt11/random4000x4000.jpg\tKnownHefei' \
+        $'17145-ip-8080\t中国电信安徽分公司\t合肥\thttp://61.191.111.11:8080/speedtest/upload.php\t61.191.111.11\t8080\thttp://61.191.111.11:8080\thttp://61.191.111.11:8080/speedtest\t0\thttp://61.191.111.11:8080/speedtest/random4000x4000.jpg\tKnownHefeiIP' \
+        $'17145-ip-80\t中国电信安徽分公司\t合肥\thttp://61.191.111.11/ccspt11/upload.php\t61.191.111.11\t80\thttp://61.191.111.11:80\thttp://61.191.111.11/ccspt11\t0\thttp://61.191.111.11/ccspt11/random4000x4000.jpg\tKnownHefeiIP'
       ;;
     联通)
       printf '%s\n' \
@@ -900,6 +902,9 @@ known_direct_http_candidates() {
       ;;
     移动)
       printf '%s\n' \
+        $'26404-speedtest-8080\t中国移动安徽分公司\t合肥\thttp://speedtest2.ah.chinamobile.com:8080/speedtest/upload.php\tspeedtest2.ah.chinamobile.com\t8080\thttp://speedtest2.ah.chinamobile.com:8080\thttp://speedtest2.ah.chinamobile.com:8080/speedtest\t0\thttp://speedtest2.ah.chinamobile.com:8080/speedtest/random4000x4000.jpg\tKnownHefei' \
+        $'26404-ip-8080\t中国移动安徽分公司\t合肥\thttp://112.29.5.6:8080/speedtest/upload.php\t112.29.5.6\t8080\thttp://112.29.5.6:8080\thttp://112.29.5.6:8080/speedtest\t0\thttp://112.29.5.6:8080/speedtest/random4000x4000.jpg\tKnownHefeiIP' \
+        $'ahcm-alt-ip-8080\t中国移动安徽分公司\t合肥\thttp://112.29.5.58:8080/speedtest/upload.php\t112.29.5.58\t8080\thttp://112.29.5.58:8080\thttp://112.29.5.58:8080/speedtest\t0\thttp://112.29.5.58:8080/speedtest/random4000x4000.jpg\tKnownHefeiIP' \
         $'4377-speedtest-8080\t中国移动安徽分公司\t合肥\thttp://4gtest.ahydnet.com:8080/speedtest/upload.php\t4gtest.ahydnet.com\t8080\thttp://4gtest.ahydnet.com:8080\thttp://4gtest.ahydnet.com:8080/speedtest\t0\thttp://4gtest.ahydnet.com:8080/speedtest/random4000x4000.jpg\tKnownHefei' \
         $'4377-speedtest-80\t中国移动安徽分公司\t合肥\thttp://4gtest.ahydnet.com/speedtest/upload.php\t4gtest.ahydnet.com\t80\thttp://4gtest.ahydnet.com:80\thttp://4gtest.ahydnet.com/speedtest\t0\thttp://4gtest.ahydnet.com/speedtest/random4000x4000.jpg\tKnownHefei'
       ;;
@@ -1023,6 +1028,16 @@ direct_failure_status() {
   else
     printf '%s失败(rc=%s;HTTP=%s)' "$stage" "$rc" "${http:--}"
   fi
+}
+
+compact_speed_status() {
+  case "$1" in
+    候选端点无IPv4地址) printf '无IPv4地址' ;;
+    候选端点无IPv6地址) printf '无IPv6地址' ;;
+    端点不可用或不支持该IP族) printf '核心不可用' ;;
+    测速低于0.1Mbps) printf '核心低于0.1Mbps' ;;
+    *) printf '%s' "$1" ;;
+  esac
 }
 
 parse_direct_http_metric() {
@@ -1390,7 +1405,7 @@ print_speed_result_row() {
 
 run_speedtests() {
   local family prov isp result retrans up down latency status engine current
-  local direct_status direct_engine fallback_status fallback_engine
+  local direct_status direct_engine fallback_status fallback_engine direct_short fallback_short
   local completed=0 total
   SPEED_CSV="$OUTPUT_DIR/single-thread-speed.csv"
   SPEED_AUDIT_CSV="$OUTPUT_DIR/endpoint-audit.csv"
@@ -1427,7 +1442,9 @@ run_speedtests() {
               result=$(run_speedtest_row "$family" "$prov" "$isp")
               IFS='|' read -r retrans up down latency fallback_status fallback_engine <<< "$result"
               if [ "$fallback_status" != "OK" ]; then
-                status="直连:${direct_status}；核心:${fallback_status}"
+                direct_short=$(compact_speed_status "$direct_status")
+                fallback_short=$(compact_speed_status "$fallback_status")
+                status="直连${direct_short}；${fallback_short}"
                 engine="${direct_engine}+${fallback_engine}"
                 result="-|-|-|-|${status}|${engine}"
               fi
