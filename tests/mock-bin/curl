@@ -16,6 +16,10 @@ for ((i=0; i<${#args[@]}; i++)); do
   esac
 done
 
+if [ "${MOCK_HEFEI_STATIC:-0}" != "1" ] && [[ "$url" == *'112.122.10.26'* ]]; then
+  exit 22
+fi
+
 if [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] && [[ "$url" == *'/api/js/servers?'* ]]; then
   payload='[
     {"id":"ah-ct","sponsor":"China Telecom AnHui 5G","name":"Hefei","cc":"CN","lat":"31.8667","lon":"117.2833","host":"ct.example:8080","url":"http://ct.example:8080/speedtest/upload.php"},
@@ -43,7 +47,7 @@ cn-ah-cm,1,0,1,1,cm.example:8080,CN,安徽,合肥,1,移动,117.2833,31.8667,1,1,
   exit 0
 fi
 
-if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ]; } &&
+if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ] || [ "${MOCK_HEFEI_STATIC:-0}" = "1" ]; } &&
    { [[ "$url" == *'/download?'* ]] || [[ "$url" == *'/random4000x4000.jpg?'* ]]; }; then
   if [ "${MOCK_SPEEDTEST_CN_STRICT:-0}" = "1" ]; then
     [ "$has_follow" -eq 1 ] || exit 22
@@ -53,7 +57,7 @@ if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1
   exit 0
 fi
 
-if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ]; } &&
+if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ] || [ "${MOCK_HEFEI_STATIC:-0}" = "1" ]; } &&
    [ "$is_upload" -eq 1 ] && [[ "$url" == *'/upload.php'* ]]; then
   if [ "${MOCK_SPEEDTEST_CN_STRICT:-0}" = "1" ]; then
     [ "$has_follow" -eq 1 ] || exit 22

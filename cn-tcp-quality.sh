@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.7.0"
+VERSION="1.8.0"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 COUNT=30
@@ -35,6 +35,7 @@ SELF_TEST=0
 OUTPUT_DIR=""
 SELECTED_PROVINCES=""
 SCRIPT_NAME="CN TCP Quality"
+HTTP_USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 CN-TCP-Quality/${VERSION}"
 
 if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
   RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'
@@ -751,7 +752,7 @@ PY
   # 过滤后反而会把可用的 IPv6 候选排除。
   url="https://www.speedtest.net/api/js/servers?engine=js&limit=200&lat=${lat}&lon=${lon}"
   curl -fsSL --retry 2 --connect-timeout 8 --max-time 30 \
-    -A 'Mozilla/5.0 CN-TCP-Quality/1.7' "$url" -o "$file" 2>/dev/null || return 1
+    -A "$HTTP_USER_AGENT" "$url" -o "$file" 2>/dev/null || return 1
   python3 - "$file" <<'PY' >/dev/null 2>&1
 import json, sys
 data = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -828,7 +829,7 @@ ensure_speedtest_cn_catalog() {
     return 0
   fi
   curl -fsSL --retry 2 --connect-timeout 8 --max-time 30 \
-    -A 'Mozilla/5.0 CN-TCP-Quality/1.7' "$SPEEDTEST_CN_CATALOG_URL" -o "$file" 2>/dev/null || return 1
+    -A "$HTTP_USER_AGENT" "$SPEEDTEST_CN_CATALOG_URL" -o "$file" 2>/dev/null || return 1
   head -1 "$file" 2>/dev/null | grep -q '^id,active,https,' || return 1
   printf '%s' "$file"
 }
@@ -880,7 +881,33 @@ for _, _, fields in sorted(found)[:10]:
 PY
 }
 
+# 合肥三网端点曾长期公开在 Ookla 服务器目录中，但目前的动态目录偶尔
+# 不再返回安徽。这里保留已知主机和两套常见目录结构，实际测速前仍会
+# 分别解析 A／AAAA 并验证下载、上传，无法连接时不会生成速度值。
+known_direct_http_candidates() {
+  local prov="$1" isp="$2"
+  [ "$prov" = "安徽" ] || return 0
+  case "$isp" in
+    电信)
+      printf '%s\n' \
+        $'17145-ccspt11-8080\t中国电信安徽分公司\t合肥\thttp://speedtest1.ah163.com:8080/ccspt11/upload.php\tspeedtest1.ah163.com\t8080\thttp://speedtest1.ah163.com:8080\thttp://speedtest1.ah163.com:8080/ccspt11\t0\thttp://speedtest1.ah163.com:8080/ccspt11/random4000x4000.jpg\tKnownHefei' \
+        $'17145-speedtest-8080\t中国电信安徽分公司\t合肥\thttp://speedtest1.ah163.com:8080/speedtest/upload.php\tspeedtest1.ah163.com\t8080\thttp://speedtest1.ah163.com:8080\thttp://speedtest1.ah163.com:8080/speedtest\t0\thttp://speedtest1.ah163.com:8080/speedtest/random4000x4000.jpg\tKnownHefei' \
+        $'17145-ccspt11-80\t中国电信安徽分公司\t合肥\thttp://speedtest1.ah163.com/ccspt11/upload.php\tspeedtest1.ah163.com\t80\thttp://speedtest1.ah163.com:80\thttp://speedtest1.ah163.com/ccspt11\t0\thttp://speedtest1.ah163.com/ccspt11/random4000x4000.jpg\tKnownHefei'
+      ;;
+    联通)
+      printf '%s\n' \
+        $'5724-speedtest-8080\t中国联通安徽分公司\t合肥\thttp://112.122.10.26:8080/speedtest/upload.php\t112.122.10.26\t8080\thttp://112.122.10.26:8080\thttp://112.122.10.26:8080/speedtest\t0\thttp://112.122.10.26:8080/speedtest/random4000x4000.jpg\tKnownHefei'
+      ;;
+    移动)
+      printf '%s\n' \
+        $'4377-speedtest-8080\t中国移动安徽分公司\t合肥\thttp://4gtest.ahydnet.com:8080/speedtest/upload.php\t4gtest.ahydnet.com\t8080\thttp://4gtest.ahydnet.com:8080\thttp://4gtest.ahydnet.com:8080/speedtest\t0\thttp://4gtest.ahydnet.com:8080/speedtest/random4000x4000.jpg\tKnownHefei' \
+        $'4377-speedtest-80\t中国移动安徽分公司\t合肥\thttp://4gtest.ahydnet.com/speedtest/upload.php\t4gtest.ahydnet.com\t80\thttp://4gtest.ahydnet.com:80\thttp://4gtest.ahydnet.com/speedtest\t0\thttp://4gtest.ahydnet.com/speedtest/random4000x4000.jpg\tKnownHefei'
+      ;;
+  esac
+}
+
 all_direct_http_candidates() {
+  known_direct_http_candidates "$1" "$2" 2>/dev/null || true
   speedtest_http_candidates "$1" "$2" 2>/dev/null || true
   speedtest_cn_http_candidates "$1" "$2" 2>/dev/null || true
 }
@@ -905,7 +932,7 @@ direct_http_download() {
   local resolve_ip="$ipaddr" pid monitor_pid rc=0
   [ "$family" = "4" ] || resolve_ip="[$ipaddr]"
   curl "-$family" --interface "$source" --noproxy '*' --http1.1 -k -sS -L \
-    -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 CN-TCP-Quality/1.7' \
+    -A "$HTTP_USER_AGENT" \
     --connect-timeout 5 --max-time "$SPEED_SECONDS" --resolve "$host:$port:$resolve_ip" \
     -H 'Cache-Control: no-cache' -o /dev/null \
     -w '%{http_code}|%{size_download}|%{speed_download}|%{time_connect}|%{time_total}|%{num_connects}' \
@@ -929,7 +956,7 @@ direct_http_upload() {
     if [ "$payload_mode" = "raw" ]; then
       head -c "$body_bytes" /dev/zero 2>/dev/null |
         curl "-$family" --interface "$source" --noproxy '*' --http1.1 -k -sS -L \
-          -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 CN-TCP-Quality/1.7' \
+          -A "$HTTP_USER_AGENT" \
           --connect-timeout 5 --max-time "$SPEED_SECONDS" --resolve "$host:$port:$resolve_ip" \
           -X POST -H "Content-Length: $body_bytes" -H 'Expect:' \
           --data-binary @- -o /dev/null \
@@ -938,10 +965,10 @@ direct_http_upload() {
       exit "${PIPESTATUS[1]}"
     else
       {
-        printf 'content1='
+        printf 'content1=' 2>/dev/null || true
         head -c "$((body_bytes - 9))" /dev/zero 2>/dev/null
       } | curl "-$family" --interface "$source" --noproxy '*' --http1.1 -k -sS -L \
-          -A 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 CN-TCP-Quality/1.7' \
+          -A "$HTTP_USER_AGENT" \
           --connect-timeout 5 --max-time "$SPEED_SECONDS" --resolve "$host:$port:$resolve_ip" \
           -X POST -H "Content-Length: $body_bytes" -H 'Content-Type: application/x-www-form-urlencoded' -H 'Expect:' \
           --data-binary @- -o /dev/null \
@@ -968,6 +995,36 @@ direct_failure_detail() {
   printf '失败(rc=%s;http=%s;bytes=%s;curl=%s)' "$rc" "${http:--}" "${bytes:--}" "$error"
 }
 
+direct_failure_status() {
+  local stage="$1" rc="$2" meta_file="$3" http="-" bytes="0" bps="0" rest
+  if [ -s "$meta_file" ]; then
+    IFS='|' read -r http bytes bps rest < "$meta_file" 2>/dev/null || true
+  fi
+  case "$rc" in
+    6) printf '域名解析失败'; return ;;
+    7) printf '端口拒绝或不可达'; return ;;
+    28)
+      if [ "${bytes:-0}" -lt 1048576 ] 2>/dev/null; then
+        printf '%s超时' "$stage"
+        return
+      fi
+      ;;
+  esac
+  case "${http:--}" in
+    401|403) printf '端点拒绝%s' "$stage"; return ;;
+    404) printf '%s路径失效' "$stage"; return ;;
+    429) printf '端点限流'; return ;;
+    5??) printf '端点服务异常(HTTP %s)' "$http"; return ;;
+  esac
+  if [ "${bytes:-0}" -lt 1048576 ] 2>/dev/null; then
+    printf '%s响应不足1MiB' "$stage"
+  elif ! awk -v n="${bps:-0}" 'BEGIN{exit !(n>=12500)}'; then
+    printf '%s低于0.1Mbps' "$stage"
+  else
+    printf '%s失败(rc=%s;HTTP=%s)' "$stage" "$rc" "${http:--}"
+  fi
+}
+
 parse_direct_http_metric() {
   local direction="$1" rc="$2" meta_file="$3" ss_file="$4"
   local http bytes bps connect total connections mbps latency retrans status
@@ -991,13 +1048,15 @@ parse_direct_http_metric() {
 run_direct_http_speed_row() {
   local family="$1" prov="$2" isp="$3" source
   local id sponsor city upload_url host port origin base distance download_hint catalog_source
-  local ipaddr resolve_seen=0 tested=0
+  local ipaddr candidate_seen=0 resolve_seen=0 tested=0
   local work drc dmeta dss down dlat dummy dstatus urc umeta uss up ulat retrans ustatus
-  local download_url download_hint_url upload_test_url upload_mode upload_modes failure status latency saved_down='' saved_dlat='' saved_engine=''
+  local download_url download_hint_url upload_test_url upload_mode upload_modes failure status latency
+  local last_status='' saved_down='' saved_dlat='' saved_engine=''
   if [ "$family" = "4" ]; then source="$SOURCE_IPV4"; else source="$SOURCE_IPV6"; fi
   [ -n "$source" ] || { printf '%s' "-|-|-|-|无本地IPv${family}|direct-http"; return; }
   while IFS=$'\t' read -r id sponsor city upload_url host port origin base distance download_hint catalog_source; do
     [ -n "$host" ] || continue
+    candidate_seen=$((candidate_seen + 1))
     ipaddr=$(resolve_speedtest_host "$family" "$host" 2>/dev/null || true)
     if [ -z "$ipaddr" ]; then
       printf 'IPv%s,%s,%s,%s,%s,%s,-,解析,无对应地址族\n' \
@@ -1025,6 +1084,7 @@ run_direct_http_speed_row() {
     done
     if [ "$dstatus" != "OK" ]; then
       failure=$(direct_failure_detail "${drc:-1}" "${dmeta:-/dev/null}" "$work.download.err")
+      last_status=$(direct_failure_status "下载" "${drc:-1}" "${dmeta:-/dev/null}")
       printf 'IPv%s,%s,%s,%s,%s,%s,%s,下载,%s\n' \
         "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" "$failure" >> "$SPEED_AUDIT_CSV"
       continue
@@ -1046,17 +1106,20 @@ run_direct_http_speed_row() {
       done
     done
     failure=$(direct_failure_detail "${urc:-1}" "${umeta:-/dev/null}" "$work.upload.err")
+    last_status=$(direct_failure_status "上传" "${urc:-1}" "${umeta:-/dev/null}")
     printf 'IPv%s,%s,%s,%s,%s,%s,%s,上传,%s\n' \
       "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" "$failure" >> "$SPEED_AUDIT_CSV"
   done < <(all_direct_http_candidates "$prov" "$isp")
   if [ -n "$saved_down" ]; then
-    printf '%s' "-|-|${saved_down}|${saved_dlat}|仅下载可用|${saved_engine}"
-  elif [ "$resolve_seen" -eq 0 ]; then
+    printf '%s' "-|-|${saved_down}|${saved_dlat}|仅下载可用：${last_status:-上传失败}|${saved_engine}"
+  elif [ "$candidate_seen" -eq 0 ]; then
     printf '%s' "-|-|-|-|未发现同省同运营商IPv${family}端点|direct-http"
+  elif [ "$resolve_seen" -eq 0 ]; then
+    printf '%s' "-|-|-|-|候选端点无IPv${family}地址|direct-http"
   elif [ "$tested" -eq 0 ]; then
-    printf '%s' "-|-|-|-|IPv${family}候选端点拒绝下载|direct-http"
+    printf '%s' "-|-|-|-|${last_status:-IPv${family}候选端点拒绝下载}|direct-http"
   else
-    printf '%s' "-|-|-|-|IPv${family}端点测速失败|direct-http"
+    printf '%s' "-|-|-|-|${last_status:-IPv${family}端点测速失败}|direct-http"
   fi
 }
 
@@ -1252,7 +1315,13 @@ run_speedtest_row() {
         "$SPEEDTEST_BIN" --location="$location" --search="$keyword" --filter-cc=CN \
         --source="$source" --thread=1 --json "${args[@]}")
       rc=$?
-      if [ "$rc" -eq 0 ]; then printf '%s' "$result"; return; fi
+      if [ "$rc" -eq 0 ]; then
+        printf 'IPv%s,%s,%s,SpeedtestCore,dynamic,-,-,测速,成功\n' \
+          "$family" "$prov" "$isp" >> "$SPEED_AUDIT_CSV"
+        printf '%s' "$result"; return
+      fi
+      printf 'IPv%s,%s,%s,SpeedtestCore,dynamic,-,-,测速,失败(rc=%s)\n' \
+        "$family" "$prov" "$isp" "$rc" >> "$SPEED_AUDIT_CSV"
       [ "$rc" -ne 3 ] || low_speed=1
     fi
   fi
@@ -1267,7 +1336,13 @@ run_speedtest_row() {
         "$SPEEDTEST_BIN" --server="$id" --source="$source" --thread=1 --json "${args[@]}")
     fi
     rc=$?
-    if [ "$rc" -eq 0 ]; then printf '%s' "$result"; return; fi
+    if [ "$rc" -eq 0 ]; then
+      printf 'IPv%s,%s,%s,SpeedtestCore,%s,-,-,测速,成功\n' \
+        "$family" "$prov" "$isp" "$id" >> "$SPEED_AUDIT_CSV"
+      printf '%s' "$result"; return
+    fi
+    printf 'IPv%s,%s,%s,SpeedtestCore,%s,-,-,测速,失败(rc=%s)\n' \
+      "$family" "$prov" "$isp" "$id" "$rc" >> "$SPEED_AUDIT_CSV"
     [ "$rc" -ne 3 ] || low_speed=1
   done
   [ "$low_speed" -eq 0 ] || { printf '%s' '-|-|-|-|测速低于0.1Mbps|speedtest'; return; }
@@ -1315,6 +1390,7 @@ print_speed_result_row() {
 
 run_speedtests() {
   local family prov isp result retrans up down latency status engine current
+  local direct_status direct_engine fallback_status fallback_engine
   local completed=0 total
   SPEED_CSV="$OUTPUT_DIR/single-thread-speed.csv"
   SPEED_AUDIT_CSV="$OUTPUT_DIR/endpoint-audit.csv"
@@ -1346,8 +1422,15 @@ run_speedtests() {
           if [ -z "$result" ]; then
             result=$(run_direct_http_speed_row "$family" "$prov" "$isp")
             IFS='|' read -r retrans up down latency status engine <<< "$result"
-            if [ "$status" != "OK" ] && [ "$status" != "仅下载可用" ] && [ "$family" = "4" ]; then
+            if [ "$status" != "OK" ] && [[ "$status" != 仅下载可用* ]] && [ "$family" = "4" ]; then
+              direct_status="$status"; direct_engine="$engine"
               result=$(run_speedtest_row "$family" "$prov" "$isp")
+              IFS='|' read -r retrans up down latency fallback_status fallback_engine <<< "$result"
+              if [ "$fallback_status" != "OK" ]; then
+                status="直连:${direct_status}；核心:${fallback_status}"
+                engine="${direct_engine}+${fallback_engine}"
+                result="-|-|-|-|${status}|${engine}"
+              fi
             fi
           fi
           IFS='|' read -r retrans up down latency status engine <<< "$result"

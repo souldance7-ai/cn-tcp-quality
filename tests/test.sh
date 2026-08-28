@@ -37,7 +37,7 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(awk -F, 'NR>1 && $11==60{n++}END{print n+0}' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
 [ "$(grep -c ',1.67,' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
-grep -q 'CN TCP.*Network Quality Benchmark (V1.7.0)' "$TEST_TMP/adaptive-terminal.txt"
+grep -q 'CN TCP.*Network Quality Benchmark (V1.8.0)' "$TEST_TMP/adaptive-terminal.txt"
 grep -q '██████╗.*███╗.*██╗' "$TEST_TMP/adaptive-terminal.txt"
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
@@ -83,7 +83,7 @@ MOCK_SPEEDTEST_LOW=1 \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
   --province ah -4 --quick --speed --no-color --output "$TEST_TMP/speed-low" >/dev/null
 
-[ "$(grep -c ',测速低于0.1Mbps,' "$TEST_TMP/speed-low/single-thread-speed.csv")" -eq 3 ]
+[ "$(grep -c '测速低于0.1Mbps' "$TEST_TMP/speed-low/single-thread-speed.csv")" -eq 3 ]
 [ "$(grep -c ',OK,' "$TEST_TMP/speed-low/single-thread-speed.csv" || true)" -eq 0 ]
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
@@ -123,8 +123,16 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ ! -e "$TEST_TMP/mapped-v6/tcp-quality.csv" ]
 [ "$(grep -c '^IPv4,.*,OK,SpeedtestCN#' "$TEST_TMP/mapped-v6/single-thread-speed.csv")" -eq 3 ]
-[ "$(grep -c '^IPv6,.*,未发现同省同运营商IPv6端点,direct-http' "$TEST_TMP/mapped-v6/single-thread-speed.csv")" -eq 3 ]
+[ "$(grep -c '^IPv6,.*,候选端点无IPv6地址,direct-http' "$TEST_TMP/mapped-v6/single-thread-speed.csv")" -eq 3 ]
 [ "$(grep -c '^IPv6,.*,::ffff:' "$TEST_TMP/mapped-v6/endpoint-audit.csv" || true)" -eq 0 ]
 grep -q '运行模式：仅单线程测速' "$TEST_TMP/mapped-v6-terminal.txt"
 
-echo "TEST PASS: syntax, banner, adaptive loss sampling, IPv6 L2 fallback, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, low-speed guard, and 30-row matrix."
+MOCK_HEFEI_STATIC=1 \
+CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
+PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
+  --province ah -4 --quick --speed-only --no-color --output "$TEST_TMP/hefei-static" >/dev/null
+
+[ "$(grep -c ',OK,KnownHefei#' "$TEST_TMP/hefei-static/single-thread-speed.csv")" -eq 3 ]
+[ "$(grep -c ',KnownHefei,.*,双向,成功' "$TEST_TMP/hefei-static/endpoint-audit.csv")" -eq 3 ]
+
+echo "TEST PASS: syntax, banner, adaptive loss sampling, IPv6 L2 fallback, Hefei static direct endpoints, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, low-speed guard, and 30-row matrix."
