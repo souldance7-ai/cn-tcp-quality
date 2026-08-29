@@ -20,8 +20,18 @@ CN_TCP_PROGRESS=always PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 [ "$(grep -c ',CN2 GIA$' "$TEST_TMP/dual/tcp-quality.csv")" -eq 20 ]
 [ "$(grep -c ',4837$' "$TEST_TMP/dual/tcp-quality.csv")" -eq 20 ]
 [ "$(grep -c ',CMIN2$' "$TEST_TMP/dual/tcp-quality.csv")" -eq 20 ]
+awk -F, '
+  NR>=2 && NR<=11  {if ($1!="IPv4" || $3!="电信") bad=1}
+  NR>=12 && NR<=21 {if ($1!="IPv4" || $3!="联通") bad=1}
+  NR>=22 && NR<=31 {if ($1!="IPv4" || $3!="移动") bad=1}
+  NR>=32 && NR<=41 {if ($1!="IPv6" || $3!="电信") bad=1}
+  NR>=42 && NR<=51 {if ($1!="IPv6" || $3!="联通") bad=1}
+  NR>=52 && NR<=61 {if ($1!="IPv6" || $3!="移动") bad=1}
+  END {exit bad}
+' "$TEST_TMP/dual/tcp-quality.csv"
 grep -q 'TCP 探测.*100%  60/60.*全部完成' "$TEST_TMP/dual-terminal.txt"
-grep -q '丢包色阶：0–10% 亮绿.*>10–20% 黄绿.*>20–30% 亮黄.*>30% 亮红' "$TEST_TMP/dual-terminal.txt"
+grep -q '丢包色阶：0–10% 亮绿.*>10–20% 亮黄.*>20–30% 粉红.*>30% 亮红' "$TEST_TMP/dual-terminal.txt"
+grep -q '延迟色阶：≤100ms 亮绿.*>100–150ms 黄绿.*>150–200ms 粉红.*>200ms 亮红' "$TEST_TMP/dual-terminal.txt"
 grep -q '最低.*最高.*路由型态.*状态' "$TEST_TMP/dual-terminal.txt"
 
 MOCK_NO_IPV6=1 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
@@ -53,7 +63,7 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(awk -F, 'NR>1 && $11==60{n++}END{print n+0}' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
 [ "$(grep -c ',1.67,' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
-grep -q 'CN TCP.*Network Quality Benchmark (V1.14.2)' "$TEST_TMP/adaptive-terminal.txt"
+grep -q 'CN TCP.*Network Quality Benchmark (V1.14.3)' "$TEST_TMP/adaptive-terminal.txt"
 grep -q '██████╗.*███╗.*██╗' "$TEST_TMP/adaptive-terminal.txt"
 
 MOCK_UNKNOWN_ROUTE=1 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
@@ -90,6 +100,13 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(wc -l < "$TEST_TMP/speed-full/single-thread-speed.csv")" -eq 32 ]
 [ "$(grep -c ',OK,' "$TEST_TMP/speed-full/single-thread-speed.csv")" -eq 31 ]
+awk -F, '
+  NR>=2 && NR<=11  {if ($1!="IPv4" || $3!="电信") bad=1}
+  NR>=12 && NR<=21 {if ($1!="IPv4" || $3!="联通") bad=1}
+  NR>=22 && NR<=31 {if ($1!="IPv4" || $3!="移动") bad=1}
+  NR==32            {if ($1!="IPv6") bad=1}
+  END {exit bad}
+' "$TEST_TMP/speed-full/single-thread-speed.csv"
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-cli.py" \
 CN_TCP_SPEEDTEST_ENGINE=cli \

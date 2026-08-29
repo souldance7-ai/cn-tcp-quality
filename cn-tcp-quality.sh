@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.14.2"
+VERSION="1.14.3"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 SPEEDTEST_NET_CATALOG_URL="${CN_TCP_SPEEDTEST_NET_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.net-CN-ID/main/CN.csv}"
@@ -46,14 +46,15 @@ if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
   RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'
   CYAN=$'\033[36m'; BOLD=$'\033[1m'; DIM=$'\033[2m'; NC=$'\033[0m'
   LOSS_GREEN=$'\033[38;5;46m'; LOSS_YELLOW_GREEN=$'\033[38;5;154m'
-  LOSS_BRIGHT_YELLOW=$'\033[38;5;226m'; LOSS_BRIGHT_RED=$'\033[38;5;196m'
+  LOSS_BRIGHT_YELLOW=$'\033[38;5;226m'; LOSS_PINK=$'\033[38;5;213m'
+  LOSS_BRIGHT_RED=$'\033[38;5;196m'
   GOLD_WHITE=$'\033[38;5;231m'; GOLD_LIGHT=$'\033[38;5;228m'
   GOLD_BRIGHT=$'\033[38;5;220m'; GOLD_AMBER=$'\033[38;5;214m'
   GOLD_WARM=$'\033[38;5;178m'; GOLD_DARK=$'\033[38;5;136m'
   GOLD_SHADOW=$'\033[38;5;94m'; TEXT_GRAY=$'\033[38;5;248m'
 else
   RED=""; GREEN=""; YELLOW=""; CYAN=""; BOLD=""; DIM=""; NC=""
-  LOSS_GREEN=""; LOSS_YELLOW_GREEN=""; LOSS_BRIGHT_YELLOW=""; LOSS_BRIGHT_RED=""
+  LOSS_GREEN=""; LOSS_YELLOW_GREEN=""; LOSS_BRIGHT_YELLOW=""; LOSS_PINK=""; LOSS_BRIGHT_RED=""
   GOLD_WHITE=""; GOLD_LIGHT=""; GOLD_BRIGHT=""; GOLD_AMBER=""
   GOLD_WARM=""; GOLD_DARK=""; GOLD_SHADOW=""; TEXT_GRAY=""
 fi
@@ -159,7 +160,7 @@ parse_args() {
   }
   [ "$NO_COLOR" -eq 0 ] || {
     RED=""; GREEN=""; YELLOW=""; CYAN=""; BOLD=""; DIM=""; NC=""
-    LOSS_GREEN=""; LOSS_YELLOW_GREEN=""; LOSS_BRIGHT_YELLOW=""; LOSS_BRIGHT_RED=""
+    LOSS_GREEN=""; LOSS_YELLOW_GREEN=""; LOSS_BRIGHT_YELLOW=""; LOSS_PINK=""; LOSS_BRIGHT_RED=""
     GOLD_WHITE=""; GOLD_LIGHT=""; GOLD_BRIGHT=""; GOLD_AMBER=""
     GOLD_WARM=""; GOLD_DARK=""; GOLD_SHADOW=""; TEXT_GRAY=""
   }
@@ -412,9 +413,9 @@ prepare_probe_plan() {
   : > "$PLAN_FILE"
   for family in 4 6; do
     [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "$family" ] || continue
-    for prov in "${PROVINCE_ORDER[@]}"; do
-      selected_province "$prov" || continue
-      for isp in 电信 联通 移动; do
+    for isp in 电信 联通 移动; do
+      for prov in "${PROVINCE_ORDER[@]}"; do
+        selected_province "$prov" || continue
         line=$(awk -F '\t' -v f="$family" -v p="$prov" -v i="$isp" '$1=="cdn" && $2==f && $3==p && $4==i {print; exit}' "$NODE_FILE")
         idx=$((idx + 1))
         if [ -n "$line" ]; then
@@ -693,27 +694,38 @@ loss_band() {
   local value="$1"
   [ "$value" = "-" ] && { printf 'dim'; return; }
   awk -v v="$value" 'BEGIN{exit !(v<=10)}' && { printf 'green'; return; }
-  awk -v v="$value" 'BEGIN{exit !(v<=20)}' && { printf 'yellow-green'; return; }
-  awk -v v="$value" 'BEGIN{exit !(v<=30)}' && { printf 'yellow'; return; }
+  awk -v v="$value" 'BEGIN{exit !(v<=20)}' && { printf 'yellow'; return; }
+  awk -v v="$value" 'BEGIN{exit !(v<=30)}' && { printf 'pink'; return; }
   printf 'red'
 }
 
 loss_color() {
   case "$(loss_band "$1")" in
     green) printf '%s' "$LOSS_GREEN" ;;
-    yellow-green) printf '%s' "$LOSS_YELLOW_GREEN" ;;
     yellow) printf '%s' "$LOSS_BRIGHT_YELLOW" ;;
+    pink) printf '%s' "$LOSS_PINK" ;;
     red) printf '%s' "$LOSS_BRIGHT_RED" ;;
     *) printf '%s' "$DIM" ;;
   esac
 }
 
-latency_color() {
+latency_band() {
   local value="$1"
-  [ "$value" = "-" ] && { printf '%s' "$DIM"; return; }
-  awk -v v="$value" 'BEGIN{exit !(v<=120)}' && { printf '%s' "$GREEN"; return; }
-  awk -v v="$value" 'BEGIN{exit !(v<=220)}' && { printf '%s' "$YELLOW"; return; }
-  printf '%s' "$RED"
+  [ "$value" = "-" ] && { printf 'dim'; return; }
+  awk -v v="$value" 'BEGIN{exit !(v<=100)}' && { printf 'green'; return; }
+  awk -v v="$value" 'BEGIN{exit !(v<=150)}' && { printf 'yellow-green'; return; }
+  awk -v v="$value" 'BEGIN{exit !(v<=200)}' && { printf 'pink'; return; }
+  printf 'red'
+}
+
+latency_color() {
+  case "$(latency_band "$1")" in
+    green) printf '%s' "$LOSS_GREEN" ;;
+    yellow-green) printf '%s' "$LOSS_YELLOW_GREEN" ;;
+    pink) printf '%s' "$LOSS_PINK" ;;
+    red) printf '%s' "$LOSS_BRIGHT_RED" ;;
+    *) printf '%s' "$DIM" ;;
+  esac
 }
 
 route_asn_path() {
@@ -832,8 +844,10 @@ show_tcp_results() {
   echo -e "${BOLD}${CYAN}十地区三网 TCP 品质（双栈）${NC}"
   echo
   printf '  '; pad_left 6 '协议'; printf '  '; pad_left 12 '地区线路'; printf '  '; pad_left 10 '丢包率'; printf '  '; pad_left 11 '平均延迟'; printf '  '; pad_left 9 '抖动'; printf '  '; pad_left 9 'P95'; printf '  '; pad_left 9 '最低'; printf '  '; pad_left 9 '最高'; printf '  '; pad_left 15 '路由型态'; printf '  '; pad_left 8 '状态'; printf '\n'
-  printf '  %b丢包色阶：0–10%% 亮绿%b ｜ %b>10–20%% 黄绿%b ｜ %b>20–30%% 亮黄%b ｜ %b>30%% 亮红%b\n' \
-    "$LOSS_GREEN" "$NC" "$LOSS_YELLOW_GREEN" "$NC" "$LOSS_BRIGHT_YELLOW" "$NC" "$LOSS_BRIGHT_RED" "$NC"
+  printf '  %b丢包色阶：0–10%% 亮绿%b ｜ %b>10–20%% 亮黄%b ｜ %b>20–30%% 粉红%b ｜ %b>30%% 亮红%b\n' \
+    "$LOSS_GREEN" "$NC" "$LOSS_BRIGHT_YELLOW" "$NC" "$LOSS_PINK" "$NC" "$LOSS_BRIGHT_RED" "$NC"
+  printf '  %b延迟色阶：≤100ms 亮绿%b ｜ %b>100–150ms 黄绿%b ｜ %b>150–200ms 粉红%b ｜ %b>200ms 亮红%b\n' \
+    "$LOSS_GREEN" "$NC" "$LOSS_YELLOW_GREEN" "$NC" "$LOSS_PINK" "$NC" "$LOSS_BRIGHT_RED" "$NC"
   for file in "$RESULT_DIR"/*.tsv; do
     idx=$(basename "$file" .tsv)
     IFS=$'\t' read -r family prov isp loss avg jitter p95 min max received status host ipaddr sent < "$file"
@@ -2097,9 +2111,9 @@ run_speedtests() {
   printf '  '; pad_left 5 '协议'; printf '  '; pad_left 10 '地区线路'; printf '  '; pad_left 9 '回程重传'; printf '  '; pad_left 10 '回程速度'; printf '  '; pad_left 10 '去程速度'; printf '  '; pad_left 11 '节点延迟'; printf '  '; pad_left 18 '状态'; printf '\n'
   if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "4" ]; then
     family=4
-    for prov in "${SPEED_PROVINCE_ORDER[@]}"; do
-      selected_province "$prov" || continue
-      for isp in 电信 联通 移动; do
+    for isp in 电信 联通 移动; do
+      for prov in "${SPEED_PROVINCE_ORDER[@]}"; do
+        selected_province "$prov" || continue
         current="IPv${family} ${prov}${isp}"
         render_progress "单线程测速" "$completed" "$total" "$current"
         result=$(run_tos_speed_row "$prov" "$isp")
@@ -2203,10 +2217,16 @@ self_test() {
     echo "SELF-TEST FAIL: cdn4=$cdn4 cdn6=$cdn6 tos=$tos plan=$plan" >&2; exit 1;
   }
   [ "$(loss_band 0)" = "green" ] && [ "$(loss_band 10)" = "green" ] &&
-    [ "$(loss_band 10.01)" = "yellow-green" ] && [ "$(loss_band 20)" = "yellow-green" ] &&
-    [ "$(loss_band 20.01)" = "yellow" ] && [ "$(loss_band 30)" = "yellow" ] &&
+    [ "$(loss_band 10.01)" = "yellow" ] && [ "$(loss_band 20)" = "yellow" ] &&
+    [ "$(loss_band 20.01)" = "pink" ] && [ "$(loss_band 30)" = "pink" ] &&
     [ "$(loss_band 30.01)" = "red" ] || {
       echo "SELF-TEST FAIL: loss color thresholds" >&2; exit 1;
+    }
+  [ "$(latency_band 0)" = "green" ] && [ "$(latency_band 100)" = "green" ] &&
+    [ "$(latency_band 100.01)" = "yellow-green" ] && [ "$(latency_band 150)" = "yellow-green" ] &&
+    [ "$(latency_band 150.01)" = "pink" ] && [ "$(latency_band 200)" = "pink" ] &&
+    [ "$(latency_band 200.01)" = "red" ] || {
+      echo "SELF-TEST FAIL: latency color thresholds" >&2; exit 1;
     }
   echo "SELF-TEST PASS: 30 IPv4 + 30 IPv6 TCP nodes, 9 IPv4 TOS endpoints."
 }
