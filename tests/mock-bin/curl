@@ -3,6 +3,7 @@
 url=""
 output=""
 is_upload=0
+is_head=0
 has_follow=0
 user_agent=""
 content_length=""
@@ -13,6 +14,7 @@ for ((i=0; i<${#args[@]}; i++)); do
   case "${args[$i]}" in
     -o) output="${args[$((i+1))]:-}" ;;
     -L|--location) has_follow=1 ;;
+    -I|--head) is_head=1 ;;
     -A|--user-agent) user_agent="${args[$((i+1))]:-}" ;;
     -H|--header)
       header="${args[$((i+1))]:-}"
@@ -26,6 +28,25 @@ for ((i=0; i<${#args[@]}; i++)); do
     http://*|https://*) url="${args[$i]}" ;;
   esac
 done
+
+if [ "$is_head" -eq 1 ]; then
+  if [ "${MOCK_TRANSPORT_FALLBACK:-0}" = "1" ]; then
+    if [[ "$url" == https://*:443/ ]]; then
+      printf '200|0|0|0.020|0.030|1'
+      exit 0
+    fi
+    printf '000|0|0|0.000|3.000|1'
+    exit 28
+  fi
+  if [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ] ||
+     [ "${MOCK_SPEEDTEST_NET_ONLY:-0}" = "1" ] || [ "${MOCK_HEFEI_STATIC:-0}" = "1" ] ||
+     [ "${MOCK_OOKLA_ALIAS:-0}" = "1" ]; then
+    printf '200|0|0|0.020|0.030|1'
+    exit 0
+  fi
+  printf '000|0|0|0.000|3.000|1'
+  exit 28
+fi
 
 if [ -n "${MOCK_CURL_URLS_FILE:-}" ] && [ -n "$url" ]; then
   printf '%s\n' "$url" >> "$MOCK_CURL_URLS_FILE"
@@ -115,6 +136,7 @@ fi
 
 if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_NET_ONLY:-0}" = "1" ] || [ "${MOCK_HEFEI_STATIC:-0}" = "1" ] || [ "${MOCK_OOKLA_ALIAS:-0}" = "1" ]; } &&
    { [[ "$url" == *'/download?'* ]] || [[ "$url" == *'/random4000x4000.jpg?'* ]]; }; then
+  if [ "${MOCK_TRANSPORT_FALLBACK:-0}" = "1" ] && [[ "$url" != https://*:443/* ]]; then exit 22; fi
   if [ "${MOCK_SPEEDTEST_CN_STRICT:-0}" = "1" ]; then
     [ "$has_follow" -eq 1 ] || exit 22
     [[ "$user_agent" == *'Mozilla/5.0'* ]] || exit 22
@@ -125,6 +147,7 @@ fi
 
 if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_NET_ONLY:-0}" = "1" ] || [ "${MOCK_HEFEI_STATIC:-0}" = "1" ] || [ "${MOCK_OOKLA_ALIAS:-0}" = "1" ]; } &&
    [ "$is_upload" -eq 1 ] && { [[ "$url" == *'/upload.php'* ]] || [[ "$url" == *'/upload'* ]]; }; then
+  if [ "${MOCK_TRANSPORT_FALLBACK:-0}" = "1" ] && [[ "$url" != https://*:443/* ]]; then exit 22; fi
   if [ "${MOCK_SPEEDTEST_CN_STRICT:-0}" = "1" ]; then
     [ "$has_follow" -eq 1 ] || exit 22
     [[ "$user_agent" == *'Mozilla/5.0'* ]] || exit 22

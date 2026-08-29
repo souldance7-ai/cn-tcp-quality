@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.12.0"
+VERSION="1.13.0"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 SPEEDTEST_NET_CATALOG_URL="${CN_TCP_SPEEDTEST_NET_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.net-CN-ID/main/CN.csv}"
@@ -78,7 +78,8 @@ CN TCP Quality V1
 说明：
   双栈 TCP 主表覆盖北京、上海、广东、安徽、江苏、武汉、浙江、山东、福建、广西三网。
   单线程吞吐逐项尝试十地区 IPv4 三网，并另测 1 个 IPv6 最近端点。
-  主表与 single-thread-speed.csv 只保留取得真实下载数据的项目；失败详情写入端点审计。
+  终端显示每一项测速尝试；single-thread-speed.csv 只保留取得真实下载数据的项目。
+  TCP 表依据实际 traceroute ASN 跳点标示 163、CN2、4837、9929、CMI、CMIN2 等路由型态。
   Zstatic 仅用于 TCP 品质探测；吞吐只使用对应省份、运营商的测速端点。
   IPv6 强制原生 AAAA 与 curl -6，不套用省份或运营商标签。
   下载不设置速率上限；仅以测试时长和最大流量保护 VPS 配额。
@@ -210,6 +211,9 @@ install_dependencies() {
   command -v ip >/dev/null 2>&1 || missing+=(ip)
   command -v ss >/dev/null 2>&1 || missing+=(ss)
   command -v timeout >/dev/null 2>&1 || missing+=(timeout)
+  if [ "$SPEED_ONLY" -eq 0 ]; then
+    command -v traceroute >/dev/null 2>&1 || missing+=(traceroute)
+  fi
   if [ "$RUN_SPEED" -eq 1 ]; then
     command -v python3 >/dev/null 2>&1 || missing+=(python3)
     command -v getent >/dev/null 2>&1 || missing+=(getent)
@@ -219,15 +223,15 @@ install_dependencies() {
   echo -e "${YELLOW}[!] 缺少依赖：${missing[*]}，正在安装……${NC}"
   if command -v apt-get >/dev/null 2>&1; then
     DEBIAN_FRONTEND=noninteractive apt-get update -qq >/dev/null 2>&1 || true
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl nmap iproute2 coreutils python3 libc-bin >/dev/null 2>&1
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl nmap iproute2 coreutils python3 libc-bin traceroute >/dev/null 2>&1
   elif command -v dnf >/dev/null 2>&1; then
-    dnf install -y -q curl nmap iproute coreutils python3 glibc-common >/dev/null 2>&1
+    dnf install -y -q curl nmap traceroute iproute coreutils python3 glibc-common >/dev/null 2>&1
   elif command -v yum >/dev/null 2>&1; then
-    yum install -y -q curl nmap iproute coreutils python3 glibc-common >/dev/null 2>&1
+    yum install -y -q curl nmap traceroute iproute coreutils python3 glibc-common >/dev/null 2>&1
   elif command -v apk >/dev/null 2>&1; then
-    apk add --no-cache curl nmap-nping iproute2 coreutils python3 musl-utils >/dev/null 2>&1
+    apk add --no-cache curl nmap-nping traceroute iproute2 coreutils python3 musl-utils >/dev/null 2>&1
   elif command -v pacman >/dev/null 2>&1; then
-    pacman -Sy --noconfirm curl nmap iproute2 coreutils python glibc >/dev/null 2>&1
+    pacman -Sy --noconfirm curl nmap traceroute iproute2 coreutils python glibc >/dev/null 2>&1
   else
     echo "无法识别包管理器，请手动安装 curl、nmap/nping、iproute2、coreutils。" >&2
     exit 1
@@ -693,17 +697,120 @@ latency_color() {
   printf '%s' "$RED"
 }
 
+route_asn_path() {
+  local raw="$1" asn_file="$2"
+  {
+    grep -oE 'AS[0-9]+' "$raw" 2>/dev/null || true
+    # traceroute 的公开路由注册查询偶尔没有返回 ASN；这些骨干地址特征仅
+    # 用作保守补证，不足以区分的线路仍标记为“未确定”。
+    if ! grep -q 'AS4809' "$raw" 2>/dev/null && grep -Eq '(^|[^0-9])59\.43\.' "$raw" 2>/dev/null; then echo AS4809; fi
+    if ! grep -q 'AS4134' "$raw" 2>/dev/null && grep -Eq '(^|[^0-9])202\.97\.' "$raw" 2>/dev/null; then echo AS4134; fi
+    if ! grep -q 'AS4837' "$raw" 2>/dev/null && grep -Eq '(^|[^0-9])219\.158\.' "$raw" 2>/dev/null; then echo AS4837; fi
+    if ! grep -q 'AS9929' "$raw" 2>/dev/null && grep -Eq '(^|[^0-9])(218\.105\.|210\.51\.|210\.78\.)' "$raw" 2>/dev/null; then echo AS9929; fi
+    if ! grep -q 'AS58453' "$raw" 2>/dev/null && grep -Eq '(^|[^0-9])(223\.120\.|223\.118\.)' "$raw" 2>/dev/null; then echo AS58453; fi
+    if ! grep -q 'AS9808' "$raw" 2>/dev/null && grep -Eq '(^|[^0-9])(221\.183\.|111\.24\.)' "$raw" 2>/dev/null; then echo AS9808; fi
+  } | awk 'NF' > "$asn_file"
+}
+
+classify_route_type() {
+  local isp="$1" asn_file="$2" n4809 n4134 n23764 n9929 n10099 n4837 n58807 n58453 n9808
+  n4809=$(grep -cx 'AS4809' "$asn_file" 2>/dev/null || true)
+  n4134=$(grep -cx 'AS4134' "$asn_file" 2>/dev/null || true)
+  n23764=$(grep -cx 'AS23764' "$asn_file" 2>/dev/null || true)
+  n9929=$(grep -cx 'AS9929' "$asn_file" 2>/dev/null || true)
+  n10099=$(grep -cx 'AS10099' "$asn_file" 2>/dev/null || true)
+  n4837=$(grep -cx 'AS4837' "$asn_file" 2>/dev/null || true)
+  n58807=$(grep -cx 'AS58807' "$asn_file" 2>/dev/null || true)
+  n58453=$(grep -cx 'AS58453' "$asn_file" 2>/dev/null || true)
+  n9808=$(grep -cx 'AS9808' "$asn_file" 2>/dev/null || true)
+  case "$isp" in
+    电信)
+      if [ "$n4809" -gt 0 ] && [ "$n4134" -gt 0 ]; then printf 'CN2 GT'
+      elif [ "$n4809" -ge 2 ]; then printf 'CN2 GIA'
+      elif [ "$n4809" -eq 1 ]; then printf 'CN2（未细分）'
+      elif [ "$n23764" -gt 0 ]; then printf 'CTGNet'
+      elif [ "$n4134" -gt 0 ]; then printf '163'
+      else printf '未确定'; fi
+      ;;
+    联通)
+      if [ "$n9929" -gt 0 ] && [ "$n4837" -gt 0 ]; then printf '9929/4837混合'
+      elif [ "$n9929" -gt 0 ]; then printf '9929'
+      elif [ "$n10099" -gt 0 ]; then printf 'CUG 10099'
+      elif [ "$n4837" -gt 0 ]; then printf '4837'
+      else printf '未确定'; fi
+      ;;
+    移动)
+      if [ "$n58807" -gt 0 ] && { [ "$n58453" -gt 0 ] || [ "$n9808" -gt 0 ]; }; then printf 'CMIN2混合'
+      elif [ "$n58807" -gt 0 ]; then printf 'CMIN2'
+      elif [ "$n58453" -gt 0 ]; then printf 'CMI'
+      elif [ "$n9808" -gt 0 ]; then printf 'CMNET'
+      else printf '未确定'; fi
+      ;;
+    *) printf '未确定' ;;
+  esac
+}
+
+trace_route_type() {
+  local idx="$1" family="$2" prov="$3" isp="$4" ipaddr="$5" port="$6"
+  local raw="$ROUTE_TRACE_DIR/${idx}.txt" asn_file="$WORK_DIR/route-${idx}.asn"
+  local route_type evidence rc=0
+  if [ "$ipaddr" = "-" ] || { [ "$family" = "6" ] && [ "$IPV6_OK" -ne 1 ]; }; then
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$family" "$prov" "$isp" "$ipaddr" "$port" "未检测" "无可用目标" > "$ROUTE_DIR/$idx.tsv"
+    return
+  fi
+  timeout 30 traceroute "-$family" -T -n -A -q 1 -N 8 -w 1 -m 24 -p "$port" \
+    "$ipaddr" > "$raw" 2>&1 || rc=$?
+  route_asn_path "$raw" "$asn_file"
+  route_type=$(classify_route_type "$isp" "$asn_file")
+  evidence=$(paste -sd+ "$asn_file" 2>/dev/null || true)
+  [ -n "$evidence" ] || evidence="无ASN证据(rc=$rc)"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$family" "$prov" "$isp" "$ipaddr" "$port" "$route_type" "$evidence" > "$ROUTE_DIR/$idx.tsv"
+}
+
+analyze_route_types() {
+  local idx type family prov isp host ipaddr port target active=0
+  ROUTE_AUDIT_CSV="$OUTPUT_DIR/route-audit.csv"
+  printf '\xEF\xBB\xBF协议,省份,运营商,目标IP,端口,路由型态,ASN证据,追踪文件\n' > "$ROUTE_AUDIT_CSV"
+  if ! command -v traceroute >/dev/null 2>&1; then
+    while IFS=$'\t' read -r idx type family prov isp host ipaddr port target; do
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$family" "$prov" "$isp" "$ipaddr" "$port" "未检测" "缺少traceroute" > "$ROUTE_DIR/$idx.tsv"
+    done < "$PLAN_FILE"
+  else
+    echo -e "${DIM}正在分析 TCP 回程骨干路由（ASN 证据）……${NC}"
+    while IFS=$'\t' read -r idx type family prov isp host ipaddr port target; do
+      trace_route_type "$idx" "$family" "$prov" "$isp" "$ipaddr" "$port" &
+      active=$((active + 1))
+      if [ "$active" -ge "$PARALLEL" ]; then wait -n 2>/dev/null || true; active=$((active - 1)); fi
+    done < "$PLAN_FILE"
+    while [ "$active" -gt 0 ]; do wait -n 2>/dev/null || true; active=$((active - 1)); done
+  fi
+  while IFS=$'\t' read -r idx type family prov isp host ipaddr port target; do
+    [ -s "$ROUTE_DIR/$idx.tsv" ] || continue
+    IFS=$'\t' read -r family prov isp ipaddr port route_type evidence < "$ROUTE_DIR/$idx.tsv"
+    printf 'IPv%s,%s,%s,%s,%s,%s,%s,%s\n' "$family" "$prov" "$isp" "$ipaddr" "$port" \
+      "$route_type" "$evidence" "route-traces/${idx}.txt" >> "$ROUTE_AUDIT_CSV"
+  done < "$PLAN_FILE"
+}
+
 show_tcp_results() {
-  local file family prov isp loss avg jitter p95 min max received status host ipaddr sent lc ac line
+  local file idx family prov isp loss avg jitter p95 min max received status host ipaddr sent lc ac line route_type evidence
   TCP_CSV="$OUTPUT_DIR/tcp-quality.csv"
-  printf '\xEF\xBB\xBF协议,省份,运营商,丢包率(%%),平均延迟(ms),抖动(ms),P95(ms),最低延迟(ms),最高延迟(ms),接收,发送,状态,域名,IP\n' > "$TCP_CSV"
+  printf '\xEF\xBB\xBF协议,省份,运营商,丢包率(%%),平均延迟(ms),抖动(ms),P95(ms),最低延迟(ms),最高延迟(ms),接收,发送,状态,域名,IP,路由型态\n' > "$TCP_CSV"
   echo -e "${BOLD}${CYAN}十地区三网 TCP 品质（双栈）${NC}"
   echo
-  printf '  '; pad_left 6 '协议'; printf '  '; pad_left 12 '地区线路'; printf '  '; pad_left 10 '丢包率'; printf '  '; pad_left 11 '平均延迟'; printf '  '; pad_left 9 '抖动'; printf '  '; pad_left 9 'P95'; printf '  '; pad_left 17 '最低／最高'; printf '  '; pad_left 8 '状态'; printf '\n'
+  printf '  '; pad_left 6 '协议'; printf '  '; pad_left 12 '地区线路'; printf '  '; pad_left 10 '丢包率'; printf '  '; pad_left 11 '平均延迟'; printf '  '; pad_left 9 '抖动'; printf '  '; pad_left 9 'P95'; printf '  '; pad_left 17 '最低／最高'; printf '  '; pad_left 13 '路由型态'; printf '  '; pad_left 8 '状态'; printf '\n'
   for file in "$RESULT_DIR"/*.tsv; do
+    idx=$(basename "$file" .tsv)
     IFS=$'\t' read -r family prov isp loss avg jitter p95 min max received status host ipaddr sent < "$file"
-    printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
-      "IPv$family" "$prov" "$isp" "$loss" "$avg" "$jitter" "$p95" "$min" "$max" "$received" "$sent" "$status" "$host" "$ipaddr" >> "$TCP_CSV"
+    route_type="未检测"
+    if [ -s "$ROUTE_DIR/$idx.tsv" ]; then
+      IFS=$'\t' read -r _ _ _ _ _ route_type evidence < "$ROUTE_DIR/$idx.tsv"
+    fi
+    printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+      "IPv$family" "$prov" "$isp" "$loss" "$avg" "$jitter" "$p95" "$min" "$max" "$received" "$sent" "$status" "$host" "$ipaddr" "$route_type" >> "$TCP_CSV"
     lc=$(loss_color "$loss"); ac=$(latency_color "$avg")
     printf '  '; printf '%b' "$CYAN"; pad_left 6 "IPv$family"; printf '%b' "$NC"
     printf '  '; printf '%b' "$CYAN"; pad_left 12 "$prov$isp"; printf '%b' "$NC"
@@ -713,6 +820,7 @@ show_tcp_results() {
     printf '  '; printf '%b' "$ac"; pad_left 9 "$(metric_text "$p95" 'ms')"; printf '%b' "$NC"
     if [ "$min" = "-" ]; then line="-"; else line="${min}/${max}ms"; fi
     printf '  '; printf '%b' "$ac"; pad_left 17 "$line"; printf '%b' "$NC"
+    printf '  '; printf '%b' "$CYAN"; pad_left 13 "$route_type"; printf '%b' "$NC"
     printf '  '; [ "$status" = "正常" ] && printf '%b' "$GREEN" || printf '%b' "$YELLOW"; pad_left 8 "$status"; printf '%b\n' "$NC"
   done
   echo
@@ -1222,6 +1330,20 @@ direct_http_download() {
   printf '%s|%s|%s' "$rc" "$meta" "$sslog"
 }
 
+direct_http_preflight() {
+  local family="$1" source="$2" host="$3" port="$4" ipaddr="$5" url="$6" work="$7"
+  local meta="$work.preflight.meta" err="$work.preflight.err" resolve_ip="$ipaddr" rc=0 http open=CLOSED
+  [ "$family" = "4" ] || resolve_ip="[$ipaddr]"
+  curl "-$family" --interface "$source" --noproxy '*' --http1.1 -k -sS -L -I \
+    -A "$HTTP_USER_AGENT" --connect-timeout 2 --max-time 3 \
+    --resolve "$host:$port:$resolve_ip" -o /dev/null \
+    -w '%{http_code}|0|0|%{time_connect}|%{time_total}|1' \
+    "$url" > "$meta" 2> "$err" || rc=$?
+  IFS='|' read -r http _ < "$meta" 2>/dev/null || true
+  if [ "$rc" -eq 0 ] || { [ -n "${http:-}" ] && [ "$http" != "000" ]; }; then open=OPEN; fi
+  printf '%s|%s|%s' "$rc" "$meta" "$open"
+}
+
 direct_http_upload() {
   local family="$1" source="$2" host="$3" port="$4" ipaddr="$5" url="$6" work="$7" payload_mode="${8:-form}"
   local meta="$work.upload.meta" err="$work.upload.err" sslog="$work.upload.ss"
@@ -1418,9 +1540,12 @@ run_direct_http_speed_row() {
   local family="$1" prov="$2" isp="$3" source
   local id sponsor city upload_url host port origin base distance download_hint catalog_source
   local ipaddr candidate_seen=0 resolve_seen=0 tested=0
-  local work drc dmeta dss down dlat dummy dstatus urc umeta uss up ulat retrans ustatus
+  local work transport_work drc dmeta dss down dlat dummy dstatus urc umeta uss up ulat retrans ustatus
   local download_url download_hint_url upload_test_url upload_mode upload_modes failure status latency
+  local original_scheme transport scheme variant_port variant_kind variant_origin variant_base variant_source
+  local prc pmeta popen transport_key path_index
   local last_status='' saved_down='' saved_dlat='' saved_engine=''
+  local -A transport_seen=()
   if [ "$family" = "4" ]; then source="$SOURCE_IPV4"; else source="$SOURCE_IPV6"; fi
   [ -n "$source" ] || { printf '%s' "-|-|-|-|无本地IPv${family}|direct-http"; return; }
   audit_direct_catalogs "$family" "$prov" "$isp"
@@ -1435,51 +1560,95 @@ run_direct_http_speed_row() {
     fi
     resolve_seen=$((resolve_seen + 1))
     work="$WORK_DIR/direct-${family}-${prov}-${isp}-${id}"
-    dstatus="FAIL"
-    download_hint_url=""
-    if [ "${download_hint:--}" != "-" ]; then
-      case "$download_hint" in
-        *\?*) download_hint_url="${download_hint}&guid=cn-tcp-$RANDOM" ;;
-        *) download_hint_url="${download_hint}?guid=cn-tcp-$RANDOM" ;;
-      esac
-    fi
-    for download_url in \
-      "$download_hint_url" \
-      "${origin}/download?size=${SPEED_BYTES}&guid=cn-tcp-$RANDOM" \
-      "${base}/random4000x4000.jpg?x=$(date +%s)$RANDOM"; do
-      [ -n "$download_url" ] || continue
-      IFS='|' read -r drc dmeta dss <<<"$(direct_http_download "$family" "$source" "$host" "$port" "$ipaddr" "$download_url" "$work")"
-      IFS='|' read -r down dlat dummy dstatus <<<"$(parse_direct_http_metric download "$drc" "$dmeta" "$dss")"
-      [ "$dstatus" = "OK" ] && break
-    done
-    if [ "$dstatus" != "OK" ]; then
-      failure=$(direct_failure_detail "${drc:-1}" "${dmeta:-/dev/null}" "$work.download.err")
-      last_status=$(direct_failure_status "下载" "${drc:-1}" "${dmeta:-/dev/null}")
-      printf 'IPv%s,%s,%s,%s,%s,%s,%s,下载,%s\n' \
-        "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" "$failure" >> "$SPEED_AUDIT_CSV"
-      continue
-    fi
-    tested=$((tested + 1))
-    saved_down="$down"; saved_dlat="$dlat"; saved_engine="${catalog_source:-DirectHTTP}#${id}:${host}"
-    if [ "$catalog_source" = "SpeedtestCN" ]; then upload_modes="raw form"; else upload_modes="form raw"; fi
-    for upload_test_url in "$upload_url" "${origin}/upload?guid=cn-tcp-$RANDOM"; do
-      for upload_mode in $upload_modes; do
-        IFS='|' read -r urc umeta uss <<<"$(direct_http_upload "$family" "$source" "$host" "$port" "$ipaddr" "$upload_test_url" "$work" "$upload_mode")"
-        IFS='|' read -r up ulat retrans ustatus <<<"$(parse_direct_http_metric upload "$urc" "$umeta" "$uss")"
-        if [ "$ustatus" = "OK" ]; then
-          latency="${ulat}/${dlat}"
-          if [ "${urc:-0}" -eq 28 ]; then upload_mode="${upload_mode}/no-response"; fi
-          printf 'IPv%s,%s,%s,%s,%s,%s,%s,双向,成功(%s)\n' \
-            "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" "$upload_mode" >> "$SPEED_AUDIT_CSV"
-          printf '%s|%s|%s|%s|OK|%s' "$retrans" "$up" "$down" "$latency" "$saved_engine"
-          return
-        fi
+    original_scheme=${origin%%://*}
+    case "$original_scheme" in http|https) ;; *) original_scheme=http ;; esac
+    for transport in \
+      "${original_scheme}|${port}|original" \
+      'http|80|fallback' 'https|443|fallback' \
+      'http|8080|fallback' 'https|8080|fallback'; do
+      IFS='|' read -r scheme variant_port variant_kind <<< "$transport"
+      transport_key="${host}|${scheme}|${variant_port}"
+      [ -z "${transport_seen[$transport_key]:-}" ] || continue
+      transport_seen[$transport_key]=1
+      if [ "$variant_kind" = "original" ]; then
+        variant_origin="$origin"; variant_base="$base"; variant_source="${catalog_source:--}"
+      else
+        variant_origin="${scheme}://${host}:${variant_port}"
+        variant_base="${variant_origin}/speedtest"
+        variant_source="${catalog_source:-DirectHTTP}Transport"
+        [[ "$variant_source" == *Transport ]] || variant_source="${variant_source}Transport"
+      fi
+      transport_work="${work}-${scheme}-${variant_port}"
+      IFS='|' read -r prc pmeta popen <<<"$(direct_http_preflight "$family" "$source" "$host" "$variant_port" "$ipaddr" "${variant_origin}/" "$transport_work")"
+      if [ "$popen" != "OPEN" ]; then
+        failure=$(direct_failure_detail "${prc:-1}" "${pmeta:-/dev/null}" "$transport_work.preflight.err")
+        last_status=$(direct_failure_status "连接" "${prc:-1}" "${pmeta:-/dev/null}")
+        printf 'IPv%s,%s,%s,%s,%s@%s-%s,%s,%s,端口预检,%s\n' \
+          "$family" "$prov" "$isp" "$variant_source" "$id" "$scheme" "$variant_port" "$host" "$ipaddr" "$failure" >> "$SPEED_AUDIT_CSV"
+        continue
+      fi
+      printf 'IPv%s,%s,%s,%s,%s@%s-%s,%s,%s,端口预检,可连接\n' \
+        "$family" "$prov" "$isp" "$variant_source" "$id" "$scheme" "$variant_port" "$host" "$ipaddr" >> "$SPEED_AUDIT_CSV"
+      download_hint_url=""
+      if [ "$variant_kind" = "original" ] && [ "${download_hint:--}" != "-" ]; then
+        case "$download_hint" in
+          *\?*) download_hint_url="${download_hint}&guid=cn-tcp-$RANDOM" ;;
+          *) download_hint_url="${download_hint}?guid=cn-tcp-$RANDOM" ;;
+        esac
+      fi
+      dstatus="FAIL"; path_index=0
+      for download_url in \
+        "$download_hint_url" \
+        "${variant_origin}/download?size=${SPEED_BYTES}&guid=cn-tcp-$RANDOM" \
+        "${variant_base}/download?size=${SPEED_BYTES}&guid=cn-tcp-$RANDOM" \
+        "${variant_base}/random4000x4000.jpg?x=$(date +%s)$RANDOM" \
+        "${variant_origin}/random4000x4000.jpg?x=$(date +%s)$RANDOM"; do
+        [ -n "$download_url" ] || continue
+        path_index=$((path_index + 1))
+        IFS='|' read -r drc dmeta dss <<<"$(direct_http_download "$family" "$source" "$host" "$variant_port" "$ipaddr" "$download_url" "${transport_work}-${path_index}")"
+        IFS='|' read -r down dlat dummy dstatus <<<"$(parse_direct_http_metric download "$drc" "$dmeta" "$dss")"
+        [ "$dstatus" = "OK" ] && break
       done
+      if [ "$dstatus" != "OK" ]; then
+        failure=$(direct_failure_detail "${drc:-1}" "${dmeta:-/dev/null}" "${transport_work}-${path_index}.download.err")
+        last_status=$(direct_failure_status "下载" "${drc:-1}" "${dmeta:-/dev/null}")
+        printf 'IPv%s,%s,%s,%s,%s@%s-%s,%s,%s,下载,%s\n' \
+          "$family" "$prov" "$isp" "$variant_source" "$id" "$scheme" "$variant_port" "$host" "$ipaddr" "$failure" >> "$SPEED_AUDIT_CSV"
+        continue
+      fi
+      tested=$((tested + 1))
+      saved_down="$down"; saved_dlat="$dlat"
+      if [ "$variant_kind" = "original" ]; then
+        saved_engine="${variant_source}#${id}:${host}"
+      else
+        saved_engine="${variant_source}#${id}@${scheme}:${variant_port}:${host}"
+      fi
+      if [ "$catalog_source" = "SpeedtestCN" ]; then upload_modes="raw form"; else upload_modes="form raw"; fi
+      path_index=0
+      for upload_test_url in \
+        "$([ "$variant_kind" = "original" ] && printf '%s' "$upload_url")" \
+        "${variant_origin}/upload?guid=cn-tcp-$RANDOM" \
+        "${variant_base}/upload.php" "${variant_origin}/upload.php"; do
+        [ -n "$upload_test_url" ] && [ "$upload_test_url" != "-" ] || continue
+        path_index=$((path_index + 1))
+        for upload_mode in $upload_modes; do
+          IFS='|' read -r urc umeta uss <<<"$(direct_http_upload "$family" "$source" "$host" "$variant_port" "$ipaddr" "$upload_test_url" "${transport_work}-${path_index}" "$upload_mode")"
+          IFS='|' read -r up ulat retrans ustatus <<<"$(parse_direct_http_metric upload "$urc" "$umeta" "$uss")"
+          if [ "$ustatus" = "OK" ]; then
+            latency="${ulat}/${dlat}"
+            if [ "${urc:-0}" -eq 28 ]; then upload_mode="${upload_mode}/no-response"; fi
+            printf 'IPv%s,%s,%s,%s,%s@%s-%s,%s,%s,双向,成功(%s)\n' \
+              "$family" "$prov" "$isp" "$variant_source" "$id" "$scheme" "$variant_port" "$host" "$ipaddr" "$upload_mode" >> "$SPEED_AUDIT_CSV"
+            printf '%s|%s|%s|%s|OK|%s' "$retrans" "$up" "$down" "$latency" "$saved_engine"
+            return
+          fi
+        done
+      done
+      failure=$(direct_failure_detail "${urc:-1}" "${umeta:-/dev/null}" "${transport_work}-${path_index}.upload.err")
+      last_status=$(direct_failure_status "上传" "${urc:-1}" "${umeta:-/dev/null}")
+      printf 'IPv%s,%s,%s,%s,%s@%s-%s,%s,%s,上传,%s\n' \
+        "$family" "$prov" "$isp" "$variant_source" "$id" "$scheme" "$variant_port" "$host" "$ipaddr" "$failure" >> "$SPEED_AUDIT_CSV"
     done
-    failure=$(direct_failure_detail "${urc:-1}" "${umeta:-/dev/null}" "$work.upload.err")
-    last_status=$(direct_failure_status "上传" "${urc:-1}" "${umeta:-/dev/null}")
-    printf 'IPv%s,%s,%s,%s,%s,%s,%s,上传,%s\n' \
-      "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" "$failure" >> "$SPEED_AUDIT_CSV"
   done < <(all_direct_http_candidates "$prov" "$isp")
   if [ -n "$saved_down" ]; then
     printf '%s' "-|-|${saved_down}|${saved_dlat}|仅下载可用：${last_status:-上传失败}|${saved_engine}"
@@ -1776,7 +1945,7 @@ run_tos_speed_row() {
 
 print_speed_result_row() {
   local family="$1" prov="$2" isp="$3" retrans="$4" up="$5" down="$6" latency="$7" status="$8" engine="$9"
-  local color="$GREEN" display_status
+  local persist="${10:-1}" color="$GREEN" display_status
   [ "$status" = "OK" ] || color="$YELLOW"
   display_status=$(compact_speed_status "$status")
   printf '  '; printf '%b' "$CYAN"; pad_left 5 "IPv$family"; printf '%b' "$NC"
@@ -1786,13 +1955,15 @@ print_speed_result_row() {
   printf '  '; printf '%b' "$color"; pad_left 10 "$(metric_text "$down" 'Mbps')"; printf '%b' "$NC"
   printf '  '; printf '%b' "$color"; pad_left 11 "$(metric_text "$latency" 'ms')"; printf '%b' "$NC"
   printf '  '; printf '%b' "$color"; pad_left 18 "$display_status"; printf '%b\n' "$NC"
-  printf 'IPv%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$family" "$prov" "$isp" "$retrans" "$up" "$down" "$latency" "$status" "$engine" >> "$SPEED_CSV"
+  if [ "$persist" -eq 1 ]; then
+    printf 'IPv%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$family" "$prov" "$isp" "$retrans" "$up" "$down" "$latency" "$status" "$engine" >> "$SPEED_CSV"
+  fi
 }
 
 run_speedtests() {
   local family prov isp result retrans up down latency status engine current
   local direct_status direct_engine fallback_status fallback_engine direct_short fallback_short
-  local completed=0 total displayed=0
+  local completed=0 total displayed=0 attempted=0 persist
   SPEED_CSV="$OUTPUT_DIR/single-thread-speed.csv"
   SPEED_AUDIT_CSV="$OUTPUT_DIR/endpoint-audit.csv"
   SPEED_EXECUTED=1
@@ -1809,7 +1980,7 @@ run_speedtests() {
     total=$((total + 1))
   fi
   echo -e "${BOLD}${CYAN}十地区 IPv4 三网＋IPv6 最近端点单线程测速${NC}"
-  echo -e "${DIM}逐项尝试同地区测速，仅显示取得真实下载数据的结果；单连接、不限制 Mbps。${NC}"
+  echo -e "${DIM}逐项显示全部尝试；只有取得真实下载数据的项目写入主结果。单连接、不限制 Mbps。${NC}"
   if [ "$total" -eq 0 ]; then
     echo -e "${YELLOW}所选范围没有可执行的吞吐项目。${NC}"
     echo
@@ -1846,10 +2017,11 @@ run_speedtests() {
         fi
         IFS='|' read -r retrans up down latency status engine <<< "$result"
         clear_progress
+        attempted=$((attempted + 1)); persist=0
         if [ -n "$down" ] && [ "$down" != "-" ] && [ "$down" != "failed" ]; then
-          print_speed_result_row "$family" "$prov" "$isp" "$retrans" "$up" "$down" "$latency" "$status" "$engine"
-          displayed=$((displayed + 1))
+          persist=1; displayed=$((displayed + 1))
         fi
+        print_speed_result_row "$family" "$prov" "$isp" "$retrans" "$up" "$down" "$latency" "$status" "$engine" "$persist"
         completed=$((completed + 1))
         render_progress "单线程测速" "$completed" "$total" "完成 ${current}"
       done
@@ -1865,15 +2037,16 @@ run_speedtests() {
       IFS='|' read -r retrans up down latency status engine <<< "$result"
     fi
     clear_progress
+    attempted=$((attempted + 1)); persist=0
     if [ -n "$down" ] && [ "$down" != "-" ] && [ "$down" != "failed" ]; then
-      print_speed_result_row 6 "最近" "端点" "$retrans" "$up" "$down" "$latency" "$status" "$engine"
-      displayed=$((displayed + 1))
+      persist=1; displayed=$((displayed + 1))
     fi
+    print_speed_result_row 6 "最近" "端点" "$retrans" "$up" "$down" "$latency" "$status" "$engine" "$persist"
     completed=$((completed + 1))
     render_progress "单线程测速" "$completed" "$total" "完成 ${current}"
   fi
   finish_progress "单线程测速" "$total" "全部完成"
-  echo -e "${DIM}主表保留 ${displayed} 项有效下载数据；其余候选仅记录于 endpoint-audit.csv。${NC}"
+  echo -e "${DIM}共尝试 ${attempted} 项；主结果保留 ${displayed} 项有效下载数据；失败明细见 endpoint-audit.csv。${NC}"
   echo
 }
 
@@ -1899,6 +2072,8 @@ write_summary() {
     echo "文件："
     echo "  probe-endpoints.csv"
     [ "$total" -gt 0 ] && echo "  tcp-quality.csv"
+    [ "$total" -gt 0 ] && echo "  route-audit.csv"
+    [ "$total" -gt 0 ] && echo "  route-traces/"
     [ "$SPEED_EXECUTED" -eq 1 ] && echo "  single-thread-speed.csv"
     [ "$SPEED_EXECUTED" -eq 1 ] && echo "  endpoint-audit.csv"
   } > "$report"
@@ -1924,6 +2099,8 @@ main() {
   mkdir -p "$OUTPUT_DIR"
   WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cn-tcp-quality.XXXXXX")
   RESULT_DIR="$WORK_DIR/results"; mkdir -p "$RESULT_DIR"
+  ROUTE_DIR="$WORK_DIR/routes"; mkdir -p "$ROUTE_DIR"
+  ROUTE_TRACE_DIR="$OUTPUT_DIR/route-traces"; mkdir -p "$ROUTE_TRACE_DIR"
   NODE_FILE="$WORK_DIR/nodes.tsv"; PLAN_FILE="$WORK_DIR/plan.tsv"
   trap 'rm -rf -- "$WORK_DIR"' EXIT INT TERM
   [ "$SELF_TEST" -eq 1 ] || show_banner
@@ -1952,13 +2129,16 @@ main() {
     echo -e "${DIM}正在探测 $(wc -l < "$PLAN_FILE") 个节点，请稍候……${NC}"
     run_tcp_probes
     echo
+    analyze_route_types
+    echo
     show_tcp_results
   fi
   if [ "$RUN_SPEED" -eq 1 ]; then
     run_speedtests
   fi
   write_summary
-  echo -e "${DIM}注：Zstatic 测十地区 60 组 TCP 品质；吞吐主表仅保留取得下载数据的项目，全部失败细节见 endpoint-audit.csv。${NC}"
+  echo -e "${DIM}注：Zstatic 测十地区 60 组 TCP 品质；路由型态依据实际 ASN 跳点，证据不足标为未确定。${NC}"
+  echo -e "${DIM}吞吐终端显示全部逐项尝试，主结果仅保留取得下载数据的项目；失败细节见 endpoint-audit.csv。${NC}"
   echo -e "${GREEN}结果已保存：$OUTPUT_DIR${NC}"
 }
 

@@ -15,7 +15,11 @@ CN_TCP_PROGRESS=always PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(wc -l < "$TEST_TMP/dual/tcp-quality.csv")" -eq 61 ]
 [ "$(wc -l < "$TEST_TMP/dual/probe-endpoints.csv")" -eq 61 ]
+[ "$(wc -l < "$TEST_TMP/dual/route-audit.csv")" -eq 61 ]
 [ "$(grep -c ',正常,' "$TEST_TMP/dual/tcp-quality.csv")" -eq 60 ]
+[ "$(grep -c ',CN2 GIA$' "$TEST_TMP/dual/tcp-quality.csv")" -eq 20 ]
+[ "$(grep -c ',4837$' "$TEST_TMP/dual/tcp-quality.csv")" -eq 20 ]
+[ "$(grep -c ',CMIN2$' "$TEST_TMP/dual/tcp-quality.csv")" -eq 20 ]
 grep -q 'TCP 探测.*100%  60/60.*全部完成' "$TEST_TMP/dual-terminal.txt"
 
 MOCK_NO_IPV6=1 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
@@ -45,7 +49,7 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(awk -F, 'NR>1 && $11==60{n++}END{print n+0}' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
 [ "$(grep -c ',1.67,' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
-grep -q 'CN TCP.*Network Quality Benchmark (V1.12.0)' "$TEST_TMP/adaptive-terminal.txt"
+grep -q 'CN TCP.*Network Quality Benchmark (V1.13.0)' "$TEST_TMP/adaptive-terminal.txt"
 grep -q '██████╗.*███╗.*██╗' "$TEST_TMP/adaptive-terminal.txt"
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
@@ -89,11 +93,13 @@ CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
 MOCK_SPEEDTEST_BORDERLINE=1 \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
-  --province bj -4 --quick --speed --no-color --output "$TEST_TMP/speed-low" >/dev/null
+  --province bj -4 --quick --speed --no-color --output "$TEST_TMP/speed-low" > "$TEST_TMP/speed-low-terminal.txt"
 
 [ "$(wc -l < "$TEST_TMP/speed-low/single-thread-speed.csv")" -eq 1 ]
 [ "$(grep -c ',OK,' "$TEST_TMP/speed-low/single-thread-speed.csv" || true)" -eq 0 ]
 grep -q '测速,失败(rc=3)' "$TEST_TMP/speed-low/endpoint-audit.csv"
+[ "$(grep -c '核心低于0.2Mbps' "$TEST_TMP/speed-low-terminal.txt")" -eq 3 ]
+grep -q '共尝试 3 项；主结果保留 0 项有效下载数据' "$TEST_TMP/speed-low-terminal.txt"
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
@@ -177,4 +183,13 @@ grep -q '^IPv4,江苏,移动,.*,OK,SpeedtestNetDaily#16204:' "$TEST_TMP/speedtes
 grep -q '^IPv4,江苏,移动,SpeedtestNetDaily,-,-,-,目录,匹配同省同运营商候选1个$' "$TEST_TMP/speedtest-net-daily/endpoint-audit.csv"
 grep -q "江苏\\|移动) printf '16204 40131 32291 34559 17320" "$ROOT/cn-tcp-quality.sh"
 
-echo "TEST PASS: syntax, banner, ten-region dual-stack TCP matrix, runtime Zstatic audit, three-catalog and multi-city discovery, successful-download-only speed output, nearest native IPv6, Cloudflare same-origin headers, download-only retention, upload no-response acceptance, IPv6 L2 fallback, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, and 0.1Mbps guard."
+MOCK_DIRECT_HTTP=1 \
+MOCK_TRANSPORT_FALLBACK=1 \
+CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
+PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
+  --province bj -4 --quick --speed-only --no-color --output "$TEST_TMP/transport-fallback" >/dev/null
+
+[ "$(grep -c ',OK,OoklaHTTPTransport#bj-.*@https:443:' "$TEST_TMP/transport-fallback/single-thread-speed.csv")" -eq 3 ]
+[ "$(grep -c ',端口预检,可连接$' "$TEST_TMP/transport-fallback/endpoint-audit.csv")" -eq 3 ]
+
+echo "TEST PASS: syntax, banner, ten-region dual-stack TCP matrix, ASN route classification, runtime Zstatic audit, all-attempt terminal output, transport fallback, three-catalog and multi-city discovery, successful-download-only CSV, nearest native IPv6, Cloudflare same-origin headers, download-only retention, upload no-response acceptance, IPv6 L2 fallback, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, and 0.1Mbps guard."
