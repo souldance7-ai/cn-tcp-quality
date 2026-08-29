@@ -14,6 +14,7 @@ CN_TCP_PROGRESS=always PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
   --count 5 --parallel 4 --no-color --output "$TEST_TMP/dual" > "$TEST_TMP/dual-terminal.txt"
 
 [ "$(wc -l < "$TEST_TMP/dual/tcp-quality.csv")" -eq 31 ]
+[ "$(wc -l < "$TEST_TMP/dual/probe-endpoints.csv")" -eq 31 ]
 [ "$(grep -c ',正常,' "$TEST_TMP/dual/tcp-quality.csv")" -eq 30 ]
 grep -q 'TCP 探测.*100%  30/30.*全部完成' "$TEST_TMP/dual-terminal.txt"
 
@@ -37,7 +38,7 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(awk -F, 'NR>1 && $11==60{n++}END{print n+0}' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
 [ "$(grep -c ',1.67,' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
-grep -q 'CN TCP.*Network Quality Benchmark (V1.10.2)' "$TEST_TMP/adaptive-terminal.txt"
+grep -q 'CN TCP.*Network Quality Benchmark (V1.11.0)' "$TEST_TMP/adaptive-terminal.txt"
 grep -q '██████╗.*███╗.*██╗' "$TEST_TMP/adaptive-terminal.txt"
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
@@ -66,8 +67,8 @@ CN_TCP_SPEEDTEST_SOURCE6="2001:db8::10" \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
   --quick --speed --no-color --output "$TEST_TMP/speed-full" >/dev/null
 
-[ "$(wc -l < "$TEST_TMP/speed-full/single-thread-speed.csv")" -eq 11 ]
-[ "$(grep -c ',OK,' "$TEST_TMP/speed-full/single-thread-speed.csv")" -eq 10 ]
+[ "$(wc -l < "$TEST_TMP/speed-full/single-thread-speed.csv")" -eq 17 ]
+[ "$(grep -c ',OK,' "$TEST_TMP/speed-full/single-thread-speed.csv")" -eq 16 ]
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-cli.py" \
 CN_TCP_SPEEDTEST_ENGINE=cli \
@@ -127,10 +128,12 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 [ "$(grep -c '^IPv6,.*,::ffff:' "$TEST_TMP/mapped-v6/endpoint-audit.csv" || true)" -eq 0 ]
 grep -q '运行模式：仅单线程测速' "$TEST_TMP/mapped-v6-terminal.txt"
 
+CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
+CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
-  --province ah -4 --quick --speed-only --no-color --output "$TEST_TMP/anhui-speed-disabled" > "$TEST_TMP/anhui-speed-disabled.txt"
+  --province ah -4 --quick --speed-only --no-color --output "$TEST_TMP/anhui-speed-enabled" > "$TEST_TMP/anhui-speed-enabled.txt"
 
-[ "$(wc -l < "$TEST_TMP/anhui-speed-disabled/single-thread-speed.csv")" -eq 1 ]
-grep -q '所选范围不含北京、上海、广东' "$TEST_TMP/anhui-speed-disabled.txt"
+[ "$(wc -l < "$TEST_TMP/anhui-speed-enabled/single-thread-speed.csv")" -eq 4 ]
+[ "$(grep -c '^IPv4,安徽,.*,OK,' "$TEST_TMP/anhui-speed-enabled/single-thread-speed.csv")" -eq 3 ]
 
-echo "TEST PASS: syntax, banner, five-province TCP matrix, Beijing-Shanghai-Guangdong IPv4 plus nearest native IPv6 speed scope, no rate-saving mode, IPv6 L2 fallback, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, and low-speed guard."
+echo "TEST PASS: syntax, banner, runtime Zstatic audit, five-province TCP matrix, five-province IPv4 plus nearest native IPv6 speed scope, no rate-saving mode, IPv6 L2 fallback, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, and low-speed guard."

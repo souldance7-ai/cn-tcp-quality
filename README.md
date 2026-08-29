@@ -10,8 +10,8 @@
 - 丢包率、平均延迟、相邻样本抖动、P95、最低／最高延迟
 - 标准模式每节点 30 个独立样本；检测到部分丢包时自动补测至 60 个样本，丢包率精度由 3.33% 提升至 1.67%
 - 本机无 IPv6 默认路由时自动跳过 IPv6，不使用 IPv4 结果代替
-- 单线程吞吐测试北京、上海、广东三网 IPv4 共 9 组，并另测 1 个自动路由的 IPv6 最近边缘端点
-- 北京／上海／广东 IPv4 优先使用真实 TOS 端点，再从 Ookla 当前目录与每日更新的 Speedtest.cn 国内目录选择同省、同运营商候选
+- 单线程吞吐测试北京、上海、广东、安徽、江苏三网 IPv4 共 15 组，并另测 1 个自动路由的 IPv6 最近边缘端点
+- 北京／上海／广东 IPv4 优先使用真实 TOS 端点；五省均会从 Ookla 当前目录与每日更新的 Speedtest.cn 国内目录选择同省、同运营商候选
 - 吞吐测试不使用 `--limit-rate`，也不启用 Speedtest `--saving-mode`；单线程不设置 Mbps 上限。IPv6 最近端点依照服务规格使用单次 250 MB 下载／50 MB 上传 payload
 - 失败原因区分无 A／AAAA、连接超时、路径失效与服务拒绝；终端状态栏采用紧凑显示避免窄窗口换行，完整诊断仍保存在 `endpoint-audit.csv`
 - IPv6 不调用 Speedtest 测速核心，也不套用省份／运营商标签：验证原生 AAAA 后，以 `curl -6` 连接 Cloudflare 自动路由的最近边缘；下载与上传严格使用官方 `__down?bytes=`／`__up?bytes=` 请求格式，不附加自定义参数
@@ -19,12 +19,13 @@
 - Speedtest.cn 端点自动跟随 HTTP 跳转并使用浏览器 User-Agent；上传优先使用原始二进制请求体，再回退传统 `content1=` 表单
 - IPv6 解析会明确排除 `::ffff:x.x.x.x` IPv4-mapped 地址，避免把只有 A 记录的端点误报为可用 IPv6
 - 每一条候选端点及 Speedtest 核心 ID 的地址族解析、下载、上传或核心执行结果另存 `endpoint-audit.csv`，可直接定位“目录没有端点”“没有 AAAA”“端口超时”“路径失效”或“端点拒绝传输”
+- Zstatic 探针域名在运行时重新解析，解析失败才使用内置已核验 IP；域名、实时地址、备援地址和实际选用来源另存 `probe-endpoints.csv`
 - TOS 主端点失败时自动轮询同省同运营商备用 IP，再回退直连 HTTP；仅 IPv4 最后使用 Speedtest 双引擎兜底
 - TCP 探测和单线程测速均显示动态渐层进度条、百分比、完成数／总数及当前线路
 - 运行后先显示内建金色 `CN TCP` 开场画面，再进入节点获取和测试，不依赖额外字体工具
 - 每个 TCP 样本独立随机来源端口与 sequence；IPv6 普通发包失败时自动尝试网卡／来源地址／下一跳 MAC 二层回退
 
-测速脚本为北京、上海、广东 9 个三网 IPv4 组合逐项测试，并额外执行 1 组 IPv6 最近边缘测速。IPv6 全程强制解析原生 AAAA、绑定本机 IPv6 来源地址并使用 `curl -6`，不会用 IPv4 或 IPv4-mapped 地址替代。若端点离线、没有对应地址族或只开放单向传输，会在该行明确显示原因，不生成假 Mbps。任一方向低于 0.1 Mbps 时不会误标为 `OK`。
+测速脚本为五省 15 个三网 IPv4 组合逐项测试，并额外执行 1 组 IPv6 最近边缘测速。Zstatic 地址只承担 TCP SYN 品质探测，绝不被当作下载源；带宽只匹配对应省份和运营商的 Speedtest 候选。IPv6 全程强制解析原生 AAAA、绑定本机 IPv6 来源地址并使用 `curl -6`，不会用 IPv4 或 IPv4-mapped 地址替代。若端点离线、没有对应地址族或只开放单向传输，会在该行明确显示原因，不生成假 Mbps。任一方向低于 0.1 Mbps 时不会误标为 `OK`。
 
 ## 一键运行
 
@@ -55,7 +56,7 @@ bash <(curl -fsSL --retry 3 "https://raw.githubusercontent.com/souldance7-ai/cn-
 ## 参数
 
 ```text
---speed             追加北上广 IPv4 三网＋IPv6 最近端点单线程测速
+--speed             追加五省 IPv4 三网＋IPv6 最近端点单线程测速
 --speed-only        仅执行单线程测速，跳过 TCP 品质表
 --quick             每节点 10 包，缩短测速时间但不限制 Mbps
 -c, --count N       每个节点发包数，默认 30
@@ -83,7 +84,8 @@ bash cn-tcp-quality.sh --speed --count 30
 ## 输出文件
 
 - `tcp-quality.csv`：五省三网双栈 TCP 指标
-- `single-thread-speed.csv`：北上广 IPv4 三网与 IPv6 最近端点单线程吞吐指标，使用 `--speed` 时生成
+- `probe-endpoints.csv`：Zstatic 探针的域名、实时解析、内置备援及实际选用 IP
+- `single-thread-speed.csv`：五省 IPv4 三网与 IPv6 最近端点单线程吞吐指标，使用 `--speed` 时生成
 - `endpoint-audit.csv`：所有直连候选的目录来源、端点 ID、解析地址和失败阶段，使用 `--speed` 时生成
 - `README.txt`：本次测试摘要
 
@@ -95,7 +97,7 @@ CSV 使用 UTF-8 BOM，可直接用 Excel 打开。
 
 ```text
 TCP 探测     [###############---------------]  50%  15/30  当前：IPv4 江苏移动
-单线程测速   [########################------]  80%   8/10  当前：IPv4 广东联通
+单线程测速   [##############################] 100%  16/16  当前：全部完成
 ```
 
 彩色终端使用红→黄→绿动态渐层；`--no-color` 时改用纯文本进度条。重定向到日志文件时默认不输出动态进度，可设置 `CN_TCP_PROGRESS=always` 强制保留。
@@ -116,11 +118,11 @@ TCP 探测     [###############---------------]  50%  15/30  当前：IPv4 江�
 
 ## 流量提醒
 
-默认不执行吞吐测速。`--speed` 对北京、上海、广东三网 IPv4 共 9 个组合逐项执行，并另测 1 个自动路由的 IPv6 最近边缘端点。脚本不设置 Mbps 上限，也不使用 Speedtest 省流模式；IPv4 标准模式每个直连方向最多 1GiB／8 秒、快速模式最多 256MiB／3 秒，IPv6 最近端点依服务规格单次最多下载 250 MB、上传 50 MB。端点拒绝或超时时会提前结束并尝试下一个候选，请确认 VPS 流量配额后使用。
+默认不执行吞吐测速。`--speed` 对五省三网 IPv4 共 15 个组合逐项执行，并另测 1 个自动路由的 IPv6 最近边缘端点。脚本不设置 Mbps 上限，也不使用 Speedtest 省流模式；IPv4 标准模式每个直连方向最多 1GiB／8 秒、快速模式最多 256MiB／3 秒，IPv6 最近端点依服务规格单次最多下载 250 MB、上传 50 MB。端点拒绝或超时时会提前结束并尝试下一个候选，请确认 VPS 流量配额后使用。
 
 ## 节点来源与第三方说明
 
-脚本优先读取 TcpQuality 对外提供的动态 TCP 探测节点接口，并带有 2026-08-28 的五省三网回退快照。IPv4 单线程测速读取 Ookla 当前服务器目录及 spiritLHLS/speedtest.cn-CN-ID 国内公开目录；IPv6 最近端点使用 Cloudflare Speed Test 官方的 `__down`／`__up` 边缘接口。IPv4 在直连失败时才回退 showwin/speedtest-go（MIT）及 sivel/speedtest-cli（Apache-2.0）。第三方测速核心下载后会校验官方 SHA-256。节点域名、IP、Zstatic CDN、火山引擎 TOS 与第三方测速服务均属于各自权利人，不包含在本项目 MIT 授权范围内，也不代表相关服务方为本项目背书。
+脚本优先读取 TcpQuality 对外提供的动态 TCP 探测节点接口，并带有五省三网回退快照；Zstatic 域名会在每次运行时重解析，固定 IP 只作 DNS 失效时的备援。IPv4 单线程测速读取 Ookla 当前服务器目录及 spiritLHLS/speedtest.cn-CN-ID 国内公开目录；IPv6 最近端点使用 Cloudflare Speed Test 官方的 `__down`／`__up` 边缘接口。IPv4 在直连失败时才回退 showwin/speedtest-go（MIT）及 sivel/speedtest-cli（Apache-2.0）。第三方测速核心下载后会校验官方 SHA-256。节点域名、IP、Zstatic CDN、火山引擎 TOS 与第三方测速服务均属于各自权利人，不包含在本项目 MIT 授权范围内，也不代表相关服务方为本项目背书。
 
 本项目不上传测试报告、不采集公网 IP、不参与排行榜。
 

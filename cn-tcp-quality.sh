@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.10.2"
+VERSION="1.11.0"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 COUNT=30
@@ -58,7 +58,7 @@ CN TCP Quality V1
   bash cn-tcp-quality.sh [选项]
 
 选项：
-  --speed             追加北上广 IPv4 三网＋IPv6 最近端点单线程测速（流量较大）
+  --speed             追加五省 IPv4 三网＋IPv6 最近端点单线程测速（流量较大）
   --speed-only        仅执行单线程测速，跳过 TCP 品质表
   --quick             快速模式：每节点 10 包，测速时间缩短（不限制 Mbps）
   -c, --count N       每个 TCP 节点发包数，默认 30，范围 3-100
@@ -75,7 +75,8 @@ CN TCP Quality V1
 
 说明：
   双栈 TCP 主表覆盖北京、上海、广东、安徽、江苏三网。
-  单线程吞吐测试北上广 IPv4 三网 9 组，并另测 1 个 IPv6 最近端点。
+  单线程吞吐测试五省 IPv4 三网 15 组，并另测 1 个 IPv6 最近端点。
+  Zstatic 仅用于 TCP 品质探测；吞吐只使用对应省份、运营商的测速端点。
   IPv6 强制原生 AAAA 与 curl -6，不套用省份或运营商标签。
   下载不设置速率上限；仅以测试时长和最大流量保护 VPS 配额。
   TCP 探测与单线程测速均显示动态进度、百分比及完成数量。
@@ -173,7 +174,7 @@ show_banner() {
   printf '%b     ░▒▓██████████████████████████████████████▓▒░%b\n' "$GOLD_SHADOW" "$NC"
   printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' \
     "$GOLD_BRIGHT" "$NC"
-  printf '%b♣  [ 五省三网双栈 TCP 品质 · 北上广 IPv4／IPv6 近端测速 ]%b\n' \
+  printf '%b♣  [ 五省三网双栈 TCP 品质 · 五省 IPv4／IPv6 近端测速 ]%b\n' \
     "$GOLD_BRIGHT$BOLD" "$NC"
   printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' \
     "$GOLD_BRIGHT" "$NC"
@@ -224,7 +225,7 @@ install_dependencies() {
     exit 1
   fi
 
-  for cmd in curl nping ip ss timeout; do
+  for cmd in curl nping ip ss timeout getent; do
     command -v "$cmd" >/dev/null 2>&1 || { echo "依赖安装失败：$cmd" >&2; exit 1; }
   done
   if [ "$RUN_SPEED" -eq 1 ]; then
@@ -237,36 +238,36 @@ install_dependencies() {
 write_builtin_nodes() {
   cat > "$1" <<'EOF'
 type	family	prov	isp	host	ip	port	target
-cdn	4	北京	电信	bj-ct-v4.ibsgss.uk	106.37.68.13	80	bj-ct-v4.ip.zstaticcdn.com
-cdn	4	北京	联通	bj-cu-v4.ibsgss.uk	221.222.185.232	80	bj-cu-v4.ip.zstaticcdn.com
-cdn	4	北京	移动	bj-cm-v4.ibsgss.uk	211.136.25.153	80	bj-cm-v4.ip.zstaticcdn.com
-cdn	6	北京	电信	bj-ct-v6.ibsgss.uk	240e:910:e000:201:8000:0:b00:99	80	bj-ct-v6.ip.zstaticcdn.com
-cdn	6	北京	联通	bj-cu-v6.ibsgss.uk	2408:8706:0:dd80::b00:95	80	bj-cu-v6.ip.zstaticcdn.com
-cdn	6	北京	移动	bj-cm-v6.ibsgss.uk	2409:8c10:c00:1b:8000:0:b00:181	80	bj-cm-v6.ip.zstaticcdn.com
-cdn	4	上海	电信	sh-ct-v4.ibsgss.uk	101.226.101.195	80	sh-ct-v4.ip.zstaticcdn.com
-cdn	4	上海	联通	sh-cu-v4.ibsgss.uk	58.246.163.108	80	sh-cu-v4.ip.zstaticcdn.com
-cdn	4	上海	移动	sh-cm-v4.ibsgss.uk	117.185.117.117	80	sh-cm-v4.ip.zstaticcdn.com
-cdn	6	上海	电信	sh-ct-v6.ibsgss.uk	240e:96c:6000:d80::b00:40	80	sh-ct-v6.ip.zstaticcdn.com
-cdn	6	上海	联通	sh-cu-v6.ibsgss.uk	2408:873c:6810:5:8000:0:b00:221	80	sh-cu-v6.ip.zstaticcdn.com
-cdn	6	上海	移动	sh-cm-v6.ibsgss.uk	2409:8c1e:75b0:2003:8000:0:b00:62	80	sh-cm-v6.ip.zstaticcdn.com
-cdn	4	广东	电信	gd-ct-v4.ibsgss.uk	14.22.119.35	80	gd-ct-v4.ip.zstaticcdn.com
-cdn	4	广东	联通	gd-cu-v4.ibsgss.uk	122.13.24.8	80	gd-cu-v4.ip.zstaticcdn.com
-cdn	4	广东	移动	gd-cm-v4.ibsgss.uk	211.139.145.129	80	gd-cm-v4.ip.zstaticcdn.com
-cdn	6	广东	电信	gd-ct-v6.ibsgss.uk	240e:97c:39:f80::b00:228	80	gd-ct-v6.ip.zstaticcdn.com
-cdn	6	广东	联通	gd-cu-v6.ibsgss.uk	2408:8756:dcff:e001:8000:0:b00:98	80	gd-cu-v6.ip.zstaticcdn.com
-cdn	6	广东	移动	gd-cm-v6.ibsgss.uk	2409:8c54:2010:700:8000:0:b00:52	80	gd-cm-v6.ip.zstaticcdn.com
-cdn	4	安徽	电信	ah-ct-v4.ibsgss.uk	117.68.20.181	80	ah-ct-v4.ip.zstaticcdn.com
-cdn	4	安徽	联通	ah-cu-v4.ibsgss.uk	112.132.39.247	80	ah-cu-v4.ip.zstaticcdn.com
-cdn	4	安徽	移动	ah-cm-v4.ibsgss.uk	39.145.24.48	80	ah-cm-v4.ip.zstaticcdn.com
-cdn	6	安徽	电信	ah-ct-v6.ibsgss.uk	240e:958:2300:212:8000:0:b00:94	80	ah-ct-v6.ip.zstaticcdn.com
-cdn	6	安徽	联通	ah-cu-v6.ibsgss.uk	2406:8880:0:4:8000:0:b00:90	80	ah-cu-v6.ip.zstaticcdn.com
-cdn	6	安徽	移动	ah-cm-v6.ibsgss.uk	2409:8c30:1000:1a01:8000:0:b00:224	80	ah-cm-v6.ip.zstaticcdn.com
-cdn	4	江苏	电信	js-ct-v4.ibsgss.uk	180.102.49.150	80	js-ct-v4.ip.zstaticcdn.com
-cdn	4	江苏	联通	js-cu-v4.ibsgss.uk	112.86.231.205	80	js-cu-v4.ip.zstaticcdn.com
-cdn	4	江苏	移动	js-cm-v4.ibsgss.uk	36.155.201.50	80	js-cm-v4.ip.zstaticcdn.com
-cdn	6	江苏	电信	js-ct-v6.ibsgss.uk	240e:979:9509:180::b00:84	80	js-ct-v6.ip.zstaticcdn.com
-cdn	6	江苏	联通	js-cu-v6.ibsgss.uk	2408:8719:3100:7:8000:0:b00:7	80	js-cu-v6.ip.zstaticcdn.com
-cdn	6	江苏	移动	js-cm-v6.ibsgss.uk	2409:8c20:6ed1:10c:8000:0:b00:138	80	js-cm-v6.ip.zstaticcdn.com
+cdn	4	北京	电信	bj-ct-v4.ip.zstaticcdn.com	106.37.68.13	80	bj-ct-v4.ip.zstaticcdn.com
+cdn	4	北京	联通	bj-cu-v4.ip.zstaticcdn.com	221.222.185.232	80	bj-cu-v4.ip.zstaticcdn.com
+cdn	4	北京	移动	bj-cm-v4.ip.zstaticcdn.com	211.136.25.153	80	bj-cm-v4.ip.zstaticcdn.com
+cdn	6	北京	电信	bj-ct-v6.ip.zstaticcdn.com	240e:904:800:1f80::b00:137	80	bj-ct-v6.ip.zstaticcdn.com
+cdn	6	北京	联通	bj-cu-v6.ip.zstaticcdn.com	2408:8706:0:dd80::b00:90	80	bj-cu-v6.ip.zstaticcdn.com
+cdn	6	北京	移动	bj-cm-v6.ip.zstaticcdn.com	2409:8c02:11c:38::b00:146	80	bj-cm-v6.ip.zstaticcdn.com
+cdn	4	上海	电信	sh-ct-v4.ip.zstaticcdn.com	101.226.101.195	80	sh-ct-v4.ip.zstaticcdn.com
+cdn	4	上海	联通	sh-cu-v4.ip.zstaticcdn.com	112.64.235.107	80	sh-cu-v4.ip.zstaticcdn.com
+cdn	4	上海	移动	sh-cm-v4.ip.zstaticcdn.com	117.185.117.117	80	sh-cm-v4.ip.zstaticcdn.com
+cdn	6	上海	电信	sh-ct-v6.ip.zstaticcdn.com	240e:96c:6000:d80::b00:40	80	sh-ct-v6.ip.zstaticcdn.com
+cdn	6	上海	联通	sh-cu-v6.ip.zstaticcdn.com	2408:873c:6810:5:8000:0:b00:220	80	sh-cu-v6.ip.zstaticcdn.com
+cdn	6	上海	移动	sh-cm-v6.ip.zstaticcdn.com	2409:8c1e:75b0:2003:8000:0:b00:62	80	sh-cm-v6.ip.zstaticcdn.com
+cdn	4	广东	电信	gd-ct-v4.ip.zstaticcdn.com	14.22.119.34	80	gd-ct-v4.ip.zstaticcdn.com
+cdn	4	广东	联通	gd-cu-v4.ip.zstaticcdn.com	122.13.24.8	80	gd-cu-v4.ip.zstaticcdn.com
+cdn	4	广东	移动	gd-cm-v4.ip.zstaticcdn.com	211.139.145.129	80	gd-cm-v4.ip.zstaticcdn.com
+cdn	6	广东	电信	gd-ct-v6.ip.zstaticcdn.com	240e:97c:4040:8ff::b00:224	80	gd-ct-v6.ip.zstaticcdn.com
+cdn	6	广东	联通	gd-cu-v6.ip.zstaticcdn.com	2408:8756:dcff:e001:8000:0:b00:99	80	gd-cu-v6.ip.zstaticcdn.com
+cdn	6	广东	移动	gd-cm-v6.ip.zstaticcdn.com	2409:8c54:2010:700:8000:0:b00:52	80	gd-cm-v6.ip.zstaticcdn.com
+cdn	4	安徽	电信	ah-ct-v4.ip.zstaticcdn.com	117.68.18.115	80	ah-ct-v4.ip.zstaticcdn.com
+cdn	4	安徽	联通	ah-cu-v4.ip.zstaticcdn.com	112.132.39.170	80	ah-cu-v4.ip.zstaticcdn.com
+cdn	4	安徽	移动	ah-cm-v4.ip.zstaticcdn.com	39.145.18.121	80	ah-cm-v4.ip.zstaticcdn.com
+cdn	6	安徽	电信	ah-ct-v6.ip.zstaticcdn.com	240e:958:2300:212:8000:0:b00:96	80	ah-ct-v6.ip.zstaticcdn.com
+cdn	6	安徽	联通	ah-cu-v6.ip.zstaticcdn.com	2406:8880:0:4:8000:0:b00:93	80	ah-cu-v6.ip.zstaticcdn.com
+cdn	6	安徽	移动	ah-cm-v6.ip.zstaticcdn.com	2409:8c30:1000:1a01:8000:0:b00:223	80	ah-cm-v6.ip.zstaticcdn.com
+cdn	4	江苏	电信	js-ct-v4.ip.zstaticcdn.com	117.62.242.190	80	js-ct-v4.ip.zstaticcdn.com
+cdn	4	江苏	联通	js-cu-v4.ip.zstaticcdn.com	59.83.208.232	80	js-cu-v4.ip.zstaticcdn.com
+cdn	4	江苏	移动	js-cm-v4.ip.zstaticcdn.com	36.155.201.187	80	js-cm-v4.ip.zstaticcdn.com
+cdn	6	江苏	电信	js-ct-v6.ip.zstaticcdn.com	240e:979:9509:180::b00:81	80	js-ct-v6.ip.zstaticcdn.com
+cdn	6	江苏	联通	js-cu-v6.ip.zstaticcdn.com	2408:873c:6010:5:8000:0:b00:32	80	js-cu-v6.ip.zstaticcdn.com
+cdn	6	江苏	移动	js-cm-v6.ip.zstaticcdn.com	2409:8c20:6ed1:10c:8000:0:b00:138	80	js-cm-v6.ip.zstaticcdn.com
 tos	4	北京	电信	tos-bj-ct-v4.ibsgss.uk	42.81.80.87	443	tos-cn-beijing.volces.com
 tos	4	北京	联通	tos-bj-cu-v4.ibsgss.uk	119.250.10.102	443	tos-cn-beijing.volces.com
 tos	4	北京	移动	tos-bj-cm-v4.ibsgss.uk	120.255.0.180	443	tos-cn-beijing.volces.com
@@ -315,6 +316,37 @@ load_nodes() {
   fi
   write_builtin_nodes "$remote"
   normalize_remote_nodes "$remote" "$NODE_FILE"
+}
+
+refresh_probe_addresses() {
+  local refreshed="$WORK_DIR/nodes.refreshed.tsv" audit="$OUTPUT_DIR/probe-endpoints.csv"
+  local type family prov isp host snapshot port target resolved selected source live=0
+  printf '\xEF\xBB\xBF协议,省份,运营商,探针域名,实时解析IP,内置备援IP,实际选用IP,选用来源\n' > "$audit"
+  : > "$refreshed"
+  while IFS=$'\t' read -r type family prov isp host snapshot port target; do
+    if [ "$type" != "cdn" ]; then
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+        "$type" "$family" "$prov" "$isp" "$host" "$snapshot" "$port" "$target" >> "$refreshed"
+      continue
+    fi
+    resolved=""
+    if [ "$family" = "4" ]; then
+      resolved=$(getent ahostsv4 "$target" 2>/dev/null | awk '$1 !~ /:/ && !seen[$1]++ {print $1; exit}' || true)
+    else
+      resolved=$(getent ahostsv6 "$target" 2>/dev/null | awk 'tolower($1) !~ /^::ffff:/ && $1 ~ /:/ && !seen[$1]++ {print $1; exit}' || true)
+    fi
+    if [ -n "$resolved" ]; then
+      selected="$resolved"; source="DNS实时解析"; live=$((live + 1))
+    else
+      selected="$snapshot"; source="内置已核验备援"
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$type" "$family" "$prov" "$isp" "$target" "$selected" "$port" "$target" >> "$refreshed"
+    printf 'IPv%s,%s,%s,%s,%s,%s,%s,%s\n' \
+      "$family" "$prov" "$isp" "$target" "${resolved:--}" "$snapshot" "$selected" "$source" >> "$audit"
+  done < "$NODE_FILE"
+  mv "$refreshed" "$NODE_FILE"
+  [ "$live" -eq 0 ] || NODE_SOURCE="${NODE_SOURCE}+zstatic-dns"
 }
 
 selected_province() {
@@ -1512,7 +1544,7 @@ run_speedtests() {
   printf '\xEF\xBB\xBF协议,省份,运营商,目录来源,端点ID,域名,解析地址,阶段,结果\n' > "$SPEED_AUDIT_CSV"
   total=0
   if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "4" ]; then
-    for prov in 北京 上海 广东; do
+    for prov in 北京 上海 广东 安徽 江苏; do
       selected_province "$prov" || continue
       total=$((total + 3))
     done
@@ -1520,10 +1552,10 @@ run_speedtests() {
   if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "6" ]; then
     total=$((total + 1))
   fi
-  echo -e "${BOLD}${CYAN}北上广 IPv4 三网＋IPv6 最近端点单线程测速${NC}"
-  echo -e "${DIM}IPv4 保留北上广 9 组；IPv6 强制 curl -6 自动连接最近边缘；单连接、不限制 Mbps。${NC}"
+  echo -e "${BOLD}${CYAN}五省 IPv4 三网＋IPv6 最近端点单线程测速${NC}"
+  echo -e "${DIM}IPv4 五省三网 15 组；IPv6 强制 curl -6 自动连接最近边缘；单连接、不限制 Mbps。${NC}"
   if [ "$total" -eq 0 ]; then
-    echo -e "${YELLOW}IPv4 所选范围不含北京、上海、广东，本次不执行吞吐测速。${NC}"
+    echo -e "${YELLOW}所选范围没有可执行的吞吐项目。${NC}"
     echo
     return
   fi
@@ -1532,7 +1564,7 @@ run_speedtests() {
   printf '  '; pad_left 5 '协议'; printf '  '; pad_left 10 '地区线路'; printf '  '; pad_left 9 '回程重传'; printf '  '; pad_left 10 '回程速度'; printf '  '; pad_left 10 '去程速度'; printf '  '; pad_left 11 '节点延迟'; printf '  '; pad_left 18 '状态'; printf '\n'
   if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "4" ]; then
     family=4
-    for prov in 北京 上海 广东; do
+    for prov in 北京 上海 广东 安徽 江苏; do
       selected_province "$prov" || continue
       for isp in 电信 联通 移动; do
         current="IPv${family} ${prov}${isp}"
@@ -1602,6 +1634,7 @@ write_summary() {
     echo "单线程测速：$([ "$SPEED_EXECUTED" -eq 1 ] && echo 已执行 || echo 未执行，可使用 --speed)"
     echo
     echo "文件："
+    echo "  probe-endpoints.csv"
     [ "$total" -gt 0 ] && echo "  tcp-quality.csv"
     [ "$SPEED_EXECUTED" -eq 1 ] && echo "  single-thread-speed.csv"
     [ "$SPEED_EXECUTED" -eq 1 ] && echo "  endpoint-audit.csv"
@@ -1636,6 +1669,8 @@ main() {
   [ "$SELF_TEST" -eq 0 ] || { self_test; exit 0; }
   need_root
   install_dependencies
+  refresh_probe_addresses
+  prepare_probe_plan
   IPV6_OK=0; ipv6_route_available && IPV6_OK=1
 
   echo "报告时间：$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M:%S CST（北京时间）')"
@@ -1660,7 +1695,7 @@ main() {
     run_speedtests
   fi
   write_summary
-  echo -e "${DIM}注：TCP 品质覆盖五省 30 组；吞吐测北上广 IPv4 9 组＋IPv6 最近端点 1 组，单线程不限制 Mbps。${NC}"
+  echo -e "${DIM}注：Zstatic 仅测五省 30 组 TCP 品质；吞吐另测五省 IPv4 15 组＋IPv6 最近端点 1 组，单线程不限制 Mbps。${NC}"
   echo -e "${GREEN}结果已保存：$OUTPUT_DIR${NC}"
 }
 
