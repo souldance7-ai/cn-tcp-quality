@@ -6,6 +6,8 @@ is_upload=0
 has_follow=0
 user_agent=""
 content_length=""
+referer=""
+origin=""
 args=("$@")
 for ((i=0; i<${#args[@]}; i++)); do
   case "${args[$i]}" in
@@ -16,6 +18,8 @@ for ((i=0; i<${#args[@]}; i++)); do
       header="${args[$((i+1))]:-}"
       case "$header" in
         Content-Length:*) content_length="${header#Content-Length: }" ;;
+        Referer:*) referer="${header#Referer: }" ;;
+        Origin:*) origin="${header#Origin: }" ;;
       esac
       ;;
     --data-binary) is_upload=1 ;;
@@ -23,10 +27,24 @@ for ((i=0; i<${#args[@]}; i++)); do
   esac
 done
 
+if [ -n "${MOCK_CURL_URLS_FILE:-}" ] && [ -n "$url" ]; then
+  printf '%s\n' "$url" >> "$MOCK_CURL_URLS_FILE"
+fi
+
 if [ "${MOCK_HEFEI_STATIC:-0}" != "1" ]; then
   case "$url" in
     *112.122.10.26*|*61.191.111.11*|*112.29.5.6*|*112.29.5.58*) exit 22 ;;
   esac
+fi
+
+if [ "${MOCK_CATALOG_DISCOVERY:-0}" = "1" ] && [[ "$url" == *'/api/js/servers?'* ]]; then
+  payload='[{"id":"neighbor-js","sponsor":"China Telecom Jiangsu","name":"Nanjing","cc":"CN","lat":"32.0603","lon":"118.7969","host":"neighbor.example:8080","url":"http://neighbor.example:8080/speedtest/upload.php"}]'
+  if [ -n "$output" ] && [ "$output" != "/dev/null" ]; then
+    printf '%s\n' "$payload" > "$output"
+  else
+    printf '%s\n' "$payload"
+  fi
+  exit 0
 fi
 
 if [[ "$url" == *'speed.cloudflare.com/__down?'* ]]; then
@@ -34,6 +52,7 @@ if [[ "$url" == *'speed.cloudflare.com/__down?'* ]]; then
   [ -n "$requested" ] && [ "$requested" -le 250000000 ] || exit 22
   [[ "$url" != *'measId='* ]] || exit 22
   [[ "$url" =~ /__down\?bytes=[0-9]+$ ]] || exit 22
+  [ "$referer" = "https://speed.cloudflare.com/" ] || exit 22
   printf '200|16777216|25000000|0.030|1.000|1'
   exit 0
 fi
@@ -44,6 +63,8 @@ if [ "$is_upload" -eq 1 ] && [[ "$url" == *'speed.cloudflare.com/__up'* ]]; then
   [[ "$url" =~ /__up\?bytes=[0-9]+$ ]] || exit 22
   [ -n "$content_length" ] && [ "$content_length" -le 50000000 ] || exit 22
   [ "$content_length" = "$requested" ] || exit 22
+  [ "$referer" = "https://speed.cloudflare.com/" ] || exit 22
+  [ "$origin" = "https://speed.cloudflare.com" ] || exit 22
   printf '200|16777216|12500000|0.040|1.000|1'
   exit 0
 fi
@@ -73,6 +94,12 @@ cn-bj-cm,1,0,1,1,cm.example:8080,CN,北京,北京,1,移动,116.4074,39.9042,1,1,
     printf '%s\n' "$payload"
   fi
   exit 0
+fi
+
+if [ "${MOCK_UPLOAD_NO_RESPONSE:-0}" = "1" ] && [ "$is_upload" -eq 1 ] &&
+   { [[ "$url" == *'/upload.php'* ]] || [[ "$url" == *'/upload'* ]]; }; then
+  printf '000|131202800|29537500|0.035|8.000|1'
+  exit 28
 fi
 
 if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ] || [ "${MOCK_HEFEI_STATIC:-0}" = "1" ] || [ "${MOCK_OOKLA_ALIAS:-0}" = "1" ]; } &&

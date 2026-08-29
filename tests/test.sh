@@ -38,7 +38,7 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(awk -F, 'NR>1 && $11==60{n++}END{print n+0}' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
 [ "$(grep -c ',1.67,' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
-grep -q 'CN TCP.*Network Quality Benchmark (V1.11.0)' "$TEST_TMP/adaptive-terminal.txt"
+grep -q 'CN TCP.*Network Quality Benchmark (V1.11.1)' "$TEST_TMP/adaptive-terminal.txt"
 grep -q '██████╗.*███╗.*██╗' "$TEST_TMP/adaptive-terminal.txt"
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
@@ -80,11 +80,11 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
-MOCK_SPEEDTEST_LOW=1 \
+MOCK_SPEEDTEST_BORDERLINE=1 \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
   --province bj -4 --quick --speed --no-color --output "$TEST_TMP/speed-low" >/dev/null
 
-[ "$(grep -c '低于0.1Mbps' "$TEST_TMP/speed-low/single-thread-speed.csv")" -eq 3 ]
+[ "$(grep -c '低于0.2Mbps' "$TEST_TMP/speed-low/single-thread-speed.csv")" -eq 3 ]
 [ "$(grep -c ',OK,' "$TEST_TMP/speed-low/single-thread-speed.csv" || true)" -eq 0 ]
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
@@ -116,6 +116,15 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 [ "$(grep -c ',双向,成功(raw)$' "$TEST_TMP/speedtest-cn-dual/endpoint-audit.csv")" -eq 4 ]
 
 MOCK_SPEEDTEST_CN_ONLY=1 \
+MOCK_UPLOAD_NO_RESPONSE=1 \
+CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
+PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
+  --province bj -4 --quick --speed-only --no-color --output "$TEST_TMP/upload-no-response" >/dev/null
+
+[ "$(grep -c '^IPv4,北京,.*,OK,SpeedtestCN#' "$TEST_TMP/upload-no-response/single-thread-speed.csv")" -eq 3 ]
+[ "$(grep -c ',双向,成功(raw/no-response)$' "$TEST_TMP/upload-no-response/endpoint-audit.csv")" -eq 3 ]
+
+MOCK_SPEEDTEST_CN_ONLY=1 \
 MOCK_IPV4_MAPPED_ONLY=1 \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
 CN_TCP_SPEEDTEST_SOURCE6="2001:db8::10" \
@@ -130,10 +139,14 @@ grep -q '运行模式：仅单线程测速' "$TEST_TMP/mapped-v6-terminal.txt"
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
+MOCK_CATALOG_DISCOVERY=1 \
+MOCK_CURL_URLS_FILE="$TEST_TMP/anhui-catalog-urls.txt" \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
   --province ah -4 --quick --speed-only --no-color --output "$TEST_TMP/anhui-speed-enabled" > "$TEST_TMP/anhui-speed-enabled.txt"
 
 [ "$(wc -l < "$TEST_TMP/anhui-speed-enabled/single-thread-speed.csv")" -eq 4 ]
 [ "$(grep -c '^IPv4,安徽,.*,OK,' "$TEST_TMP/anhui-speed-enabled/single-thread-speed.csv")" -eq 3 ]
+[ "$(grep '/api/js/servers?' "$TEST_TMP/anhui-catalog-urls.txt" | sort -u | wc -l)" -eq 6 ]
+[ "$(grep -c 'OoklaHTTP.*neighbor-js' "$TEST_TMP/anhui-speed-enabled/endpoint-audit.csv" || true)" -eq 0 ]
 
-echo "TEST PASS: syntax, banner, runtime Zstatic audit, five-province TCP matrix, five-province IPv4 plus nearest native IPv6 speed scope, no rate-saving mode, IPv6 L2 fallback, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, and low-speed guard."
+echo "TEST PASS: syntax, banner, runtime Zstatic audit, five-province TCP matrix, multi-city discovery, five-province IPv4 plus nearest native IPv6 speed scope, Cloudflare same-origin headers, upload no-response acceptance, IPv6 L2 fallback, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, and 0.1Mbps guard."

@@ -12,11 +12,13 @@
 - 本机无 IPv6 默认路由时自动跳过 IPv6，不使用 IPv4 结果代替
 - 单线程吞吐测试北京、上海、广东、安徽、江苏三网 IPv4 共 15 组，并另测 1 个自动路由的 IPv6 最近边缘端点
 - 北京／上海／广东 IPv4 优先使用真实 TOS 端点；五省均会从 Ookla 当前目录与每日更新的 Speedtest.cn 国内目录选择同省、同运营商候选
+- 安徽动态发现会分别查询合肥、芜湖、蚌埠、阜阳、安庆、淮南；江苏查询南京、苏州、徐州、南通、无锡、连云港，并以省份／城市特征二次过滤，禁止把邻省节点冒充本省
 - 吞吐测试不使用 `--limit-rate`，也不启用 Speedtest `--saving-mode`；单线程不设置 Mbps 上限。IPv6 最近端点依照服务规格使用单次 250 MB 下载／50 MB 上传 payload
 - 失败原因区分无 A／AAAA、连接超时、路径失效与服务拒绝；终端状态栏采用紧凑显示避免窄窗口换行，完整诊断仍保存在 `endpoint-audit.csv`
-- IPv6 不调用 Speedtest 测速核心，也不套用省份／运营商标签：验证原生 AAAA 后，以 `curl -6` 连接 Cloudflare 自动路由的最近边缘；下载与上传严格使用官方 `__down?bytes=`／`__up?bytes=` 请求格式，不附加自定义参数
+- IPv6 不调用 Speedtest 测速核心，也不套用省份／运营商标签：验证原生 AAAA 后，以 `curl -6` 连接 Cloudflare 自动路由的最近边缘；下载先以 100 KB 预热，并携带同源 Referer，再执行官方 `__down?bytes=`／`__up?bytes=` 请求
 - 直连测速优先原样使用目录公布的 `downloadUrl`／`uploadUrl`，再兼容新版 `/download`、`/upload` 和传统 `random*.jpg`、`upload.php` 协议
 - Speedtest.cn 端点自动跟随 HTTP 跳转并使用浏览器 User-Agent；上传优先使用原始二进制请求体，再回退传统 `content1=` 表单
+- 上传若已在时限内持续发送超过 1 MiB、但服务端未及时返回 HTTP 响应，仍保留实际单线程上传速度，并在审计中标记 `no-response`
 - IPv6 解析会明确排除 `::ffff:x.x.x.x` IPv4-mapped 地址，避免把只有 A 记录的端点误报为可用 IPv6
 - 每一条候选端点及 Speedtest 核心 ID 的地址族解析、下载、上传或核心执行结果另存 `endpoint-audit.csv`，可直接定位“目录没有端点”“没有 AAAA”“端口超时”“路径失效”或“端点拒绝传输”
 - Zstatic 探针域名在运行时重新解析，解析失败才使用内置已核验 IP；域名、实时地址、备援地址和实际选用来源另存 `probe-endpoints.csv`
@@ -25,7 +27,7 @@
 - 运行后先显示内建金色 `CN TCP` 开场画面，再进入节点获取和测试，不依赖额外字体工具
 - 每个 TCP 样本独立随机来源端口与 sequence；IPv6 普通发包失败时自动尝试网卡／来源地址／下一跳 MAC 二层回退
 
-测速脚本为五省 15 个三网 IPv4 组合逐项测试，并额外执行 1 组 IPv6 最近边缘测速。Zstatic 地址只承担 TCP SYN 品质探测，绝不被当作下载源；带宽只匹配对应省份和运营商的 Speedtest 候选。IPv6 全程强制解析原生 AAAA、绑定本机 IPv6 来源地址并使用 `curl -6`，不会用 IPv4 或 IPv4-mapped 地址替代。若端点离线、没有对应地址族或只开放单向传输，会在该行明确显示原因，不生成假 Mbps。任一方向低于 0.1 Mbps 时不会误标为 `OK`。
+测速脚本为五省 15 个三网 IPv4 组合逐项测试，并额外执行 1 组 IPv6 最近边缘测速。Zstatic 地址只承担 TCP SYN 品质探测，绝不被当作下载源；带宽只匹配对应省份和运营商的 Speedtest 候选。IPv6 全程强制解析原生 AAAA、绑定本机 IPv6 来源地址并使用 `curl -6`，不会用 IPv4 或 IPv4-mapped 地址替代。若端点离线、没有对应地址族或只开放单向传输，会在该行明确显示原因，不生成假 Mbps；显示值仅 `0.1 Mbps` 时不会标成 `OK`。
 
 ## 一键运行
 
