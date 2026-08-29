@@ -32,12 +32,18 @@ fi
 if [[ "$url" == *'speed.cloudflare.com/__down?'* ]]; then
   requested=$(printf '%s' "$url" | sed -nE 's/.*[?&]bytes=([0-9]+).*/\1/p')
   [ -n "$requested" ] && [ "$requested" -le 250000000 ] || exit 22
+  [[ "$url" != *'measId='* ]] || exit 22
+  [[ "$url" =~ /__down\?bytes=[0-9]+$ ]] || exit 22
   printf '200|16777216|25000000|0.030|1.000|1'
   exit 0
 fi
 
 if [ "$is_upload" -eq 1 ] && [[ "$url" == *'speed.cloudflare.com/__up'* ]]; then
+  requested=$(printf '%s' "$url" | sed -nE 's/.*[?&]bytes=([0-9]+).*/\1/p')
+  [ -n "$requested" ] && [ "$requested" -le 50000000 ] || exit 22
+  [[ "$url" =~ /__up\?bytes=[0-9]+$ ]] || exit 22
   [ -n "$content_length" ] && [ "$content_length" -le 50000000 ] || exit 22
+  [ "$content_length" = "$requested" ] || exit 22
   printf '200|16777216|12500000|0.040|1.000|1'
   exit 0
 fi

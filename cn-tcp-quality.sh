@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.10.1"
+VERSION="1.10.2"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 COUNT=30
@@ -1125,8 +1125,10 @@ run_nearest_ipv6_speed_row() {
   [ "$download_bytes" -le 250000000 ] || download_bytes=250000000
   [ "$upload_bytes" -le 50000000 ] || upload_bytes=50000000
   work="$WORK_DIR/nearest-ipv6-cloudflare"
-  download_url="https://${host}/__down?bytes=${download_bytes}&measId=cn-tcp-${RANDOM}"
-  upload_url="https://${host}/__up"
+  # 严格对齐 Cloudflare 官方 BandwidthEngine：下载与上传都只携带 bytes
+  # 查询参数。不要附加自定义 measId；部分边缘会拒绝非官方请求格式。
+  download_url="https://${host}/__down?bytes=${download_bytes}"
+  upload_url="https://${host}/__up?bytes=${upload_bytes}"
   IFS='|' read -r drc dmeta dss <<<"$(direct_http_download 6 "$source" "$host" "$port" "$ipaddr" "$download_url" "$work")"
   IFS='|' read -r down dlat dummy dstatus <<<"$(parse_direct_http_metric download "$drc" "$dmeta" "$dss")"
   if [ "$dstatus" != "OK" ]; then

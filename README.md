@@ -14,7 +14,7 @@
 - 北京／上海／广东 IPv4 优先使用真实 TOS 端点，再从 Ookla 当前目录与每日更新的 Speedtest.cn 国内目录选择同省、同运营商候选
 - 吞吐测试不使用 `--limit-rate`，也不启用 Speedtest `--saving-mode`；单线程不设置 Mbps 上限。IPv6 最近端点依照服务规格使用单次 250 MB 下载／50 MB 上传 payload
 - 失败原因区分无 A／AAAA、连接超时、路径失效与服务拒绝；终端状态栏采用紧凑显示避免窄窗口换行，完整诊断仍保存在 `endpoint-audit.csv`
-- IPv6 不调用 Speedtest 测速核心，也不套用省份／运营商标签：验证原生 AAAA 后，以 `curl -6` 连接 Cloudflare 自动路由的最近边缘
+- IPv6 不调用 Speedtest 测速核心，也不套用省份／运营商标签：验证原生 AAAA 后，以 `curl -6` 连接 Cloudflare 自动路由的最近边缘；下载与上传严格使用官方 `__down?bytes=`／`__up?bytes=` 请求格式，不附加自定义参数
 - 直连测速优先原样使用目录公布的 `downloadUrl`／`uploadUrl`，再兼容新版 `/download`、`/upload` 和传统 `random*.jpg`、`upload.php` 协议
 - Speedtest.cn 端点自动跟随 HTTP 跳转并使用浏览器 User-Agent；上传优先使用原始二进制请求体，再回退传统 `content1=` 表单
 - IPv6 解析会明确排除 `::ffff:x.x.x.x` IPv4-mapped 地址，避免把只有 A 记录的端点误报为可用 IPv6
