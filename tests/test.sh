@@ -49,8 +49,14 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(awk -F, 'NR>1 && $11==60{n++}END{print n+0}' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
 [ "$(grep -c ',1.67,' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
-grep -q 'CN TCP.*Network Quality Benchmark (V1.13.0)' "$TEST_TMP/adaptive-terminal.txt"
+grep -q 'CN TCP.*Network Quality Benchmark (V1.14.0)' "$TEST_TMP/adaptive-terminal.txt"
 grep -q '██████╗.*███╗.*██╗' "$TEST_TMP/adaptive-terminal.txt"
+
+MOCK_UNKNOWN_ROUTE=1 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
+  --province bj -4 --count 3 --parallel 3 --no-color --output "$TEST_TMP/unknown-route" >/dev/null
+
+[ "$(grep -c ',未确定（AS64510/AS64511）$' "$TEST_TMP/unknown-route/tcp-quality.csv")" -eq 3 ]
+[ "$(grep -c ',未确定（AS64510/AS64511）,AS64510+AS64511,' "$TEST_TMP/unknown-route/route-audit.csv")" -eq 3 ]
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
@@ -98,8 +104,8 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 [ "$(wc -l < "$TEST_TMP/speed-low/single-thread-speed.csv")" -eq 1 ]
 [ "$(grep -c ',OK,' "$TEST_TMP/speed-low/single-thread-speed.csv" || true)" -eq 0 ]
 grep -q '测速,失败(rc=3)' "$TEST_TMP/speed-low/endpoint-audit.csv"
-[ "$(grep -c '核心低于0.2Mbps' "$TEST_TMP/speed-low-terminal.txt")" -eq 3 ]
-grep -q '共尝试 3 项；主结果保留 0 项有效下载数据' "$TEST_TMP/speed-low-terminal.txt"
+! grep -q '核心低于0.2Mbps' "$TEST_TMP/speed-low-terminal.txt"
+grep -q '共尝试 3 项；主表显示 0 项有效下载数据，隐藏 3 项失败' "$TEST_TMP/speed-low-terminal.txt"
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
@@ -192,4 +198,17 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 [ "$(grep -c ',OK,OoklaHTTPTransport#bj-.*@https:443:' "$TEST_TMP/transport-fallback/single-thread-speed.csv")" -eq 3 ]
 [ "$(grep -c ',端口预检,可连接$' "$TEST_TMP/transport-fallback/endpoint-audit.csv")" -eq 3 ]
 
-echo "TEST PASS: syntax, banner, ten-region dual-stack TCP matrix, ASN route classification, runtime Zstatic audit, all-attempt terminal output, transport fallback, three-catalog and multi-city discovery, successful-download-only CSV, nearest native IPv6, Cloudflare same-origin headers, download-only retention, upload no-response acceptance, IPv6 L2 fallback, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, and 0.1Mbps guard."
+MOCK_ORIGINAL_PORT_SCHEME=1 \
+CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
+CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
+PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
+  --province wh -4 --quick --speed-only --no-color --output "$TEST_TMP/original-port-scheme" >/dev/null
+
+grep -q '^IPv4,武汉,电信,.*,OK,SpeedtestCNTransport#wh-ct-51090@http:51090:' \
+  "$TEST_TMP/original-port-scheme/single-thread-speed.csv"
+grep -q '^IPv4,武汉,电信,SpeedtestCN,wh-ct-51090,node-59-175-206-86.speedtest.cn,59.175.206.86,解析,使用目录IPv4备援$' \
+  "$TEST_TMP/original-port-scheme/endpoint-audit.csv"
+grep -q '^IPv4,武汉,电信,SpeedtestCNTransport,wh-ct-51090@http-51090,.*双向,成功(raw)$' \
+  "$TEST_TMP/original-port-scheme/endpoint-audit.csv"
+
+echo "TEST PASS: syntax, banner, ten-region dual-stack TCP matrix, ASN route classification and explicit unknown evidence, runtime Zstatic audit, successful-download-only terminal/CSV, transport and original-port scheme fallback, catalog IPv4 fallback, three-catalog and multi-city discovery, nearest native IPv6, Cloudflare same-origin headers, download-only retention, upload no-response acceptance, IPv6 L2 fallback, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, and 0.1Mbps guard."

@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.13.0"
+VERSION="1.14.0"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 SPEEDTEST_NET_CATALOG_URL="${CN_TCP_SPEEDTEST_NET_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.net-CN-ID/main/CN.csv}"
@@ -36,6 +36,9 @@ SELF_TEST=0
 OUTPUT_DIR=""
 SELECTED_PROVINCES=""
 PROVINCE_ORDER=(北京 上海 广东 安徽 江苏 武汉 浙江 山东 福建 广西)
+# 已在境外实机取得过有效下载的地区优先，避免安徽旧端点超时拖延。
+# 江苏已确认电信、移动可用；其余地区仍继续完整发现和审计。
+SPEED_PROVINCE_ORDER=(北京 上海 广东 江苏 安徽 武汉 浙江 山东 福建 广西)
 SCRIPT_NAME="CN TCP Quality"
 HTTP_USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 CN-TCP-Quality/${VERSION}"
 
@@ -712,8 +715,18 @@ route_asn_path() {
   } | awk 'NF' > "$asn_file"
 }
 
+unknown_route_label() {
+  local asn_file="$1" summary
+  summary=$(awk '!seen[$0]++{print; if(++n==4) exit}' "$asn_file" 2>/dev/null | paste -sd/ -)
+  if [ -n "$summary" ]; then
+    printf '未确定（%s）' "$summary"
+  else
+    printf '未确定（无ASN证据）'
+  fi
+}
+
 classify_route_type() {
-  local isp="$1" asn_file="$2" n4809 n4134 n23764 n9929 n10099 n4837 n58807 n58453 n9808
+  local isp="$1" asn_file="$2" n4809 n4134 n23764 n9929 n10099 n4837 n58807 n58453 n9808 unknown
   n4809=$(grep -cx 'AS4809' "$asn_file" 2>/dev/null || true)
   n4134=$(grep -cx 'AS4134' "$asn_file" 2>/dev/null || true)
   n23764=$(grep -cx 'AS23764' "$asn_file" 2>/dev/null || true)
@@ -723,30 +736,31 @@ classify_route_type() {
   n58807=$(grep -cx 'AS58807' "$asn_file" 2>/dev/null || true)
   n58453=$(grep -cx 'AS58453' "$asn_file" 2>/dev/null || true)
   n9808=$(grep -cx 'AS9808' "$asn_file" 2>/dev/null || true)
+  unknown=$(unknown_route_label "$asn_file")
   case "$isp" in
     电信)
       if [ "$n4809" -gt 0 ] && [ "$n4134" -gt 0 ]; then printf 'CN2 GT'
       elif [ "$n4809" -ge 2 ]; then printf 'CN2 GIA'
-      elif [ "$n4809" -eq 1 ]; then printf 'CN2（未细分）'
+      elif [ "$n4809" -eq 1 ]; then printf 'CN2 AS4809（未细分）'
       elif [ "$n23764" -gt 0 ]; then printf 'CTGNet'
       elif [ "$n4134" -gt 0 ]; then printf '163'
-      else printf '未确定'; fi
+      else printf '%s' "$unknown"; fi
       ;;
     联通)
       if [ "$n9929" -gt 0 ] && [ "$n4837" -gt 0 ]; then printf '9929/4837混合'
       elif [ "$n9929" -gt 0 ]; then printf '9929'
       elif [ "$n10099" -gt 0 ]; then printf 'CUG 10099'
       elif [ "$n4837" -gt 0 ]; then printf '4837'
-      else printf '未确定'; fi
+      else printf '%s' "$unknown"; fi
       ;;
     移动)
       if [ "$n58807" -gt 0 ] && { [ "$n58453" -gt 0 ] || [ "$n9808" -gt 0 ]; }; then printf 'CMIN2混合'
       elif [ "$n58807" -gt 0 ]; then printf 'CMIN2'
       elif [ "$n58453" -gt 0 ]; then printf 'CMI'
       elif [ "$n9808" -gt 0 ]; then printf 'CMNET'
-      else printf '未确定'; fi
+      else printf '%s' "$unknown"; fi
       ;;
-    *) printf '未确定' ;;
+    *) printf '%s' "$unknown" ;;
   esac
 }
 
@@ -801,7 +815,7 @@ show_tcp_results() {
   printf '\xEF\xBB\xBF协议,省份,运营商,丢包率(%%),平均延迟(ms),抖动(ms),P95(ms),最低延迟(ms),最高延迟(ms),接收,发送,状态,域名,IP,路由型态\n' > "$TCP_CSV"
   echo -e "${BOLD}${CYAN}十地区三网 TCP 品质（双栈）${NC}"
   echo
-  printf '  '; pad_left 6 '协议'; printf '  '; pad_left 12 '地区线路'; printf '  '; pad_left 10 '丢包率'; printf '  '; pad_left 11 '平均延迟'; printf '  '; pad_left 9 '抖动'; printf '  '; pad_left 9 'P95'; printf '  '; pad_left 17 '最低／最高'; printf '  '; pad_left 13 '路由型态'; printf '  '; pad_left 8 '状态'; printf '\n'
+  printf '  '; pad_left 6 '协议'; printf '  '; pad_left 12 '地区线路'; printf '  '; pad_left 10 '丢包率'; printf '  '; pad_left 11 '平均延迟'; printf '  '; pad_left 9 '抖动'; printf '  '; pad_left 9 'P95'; printf '  '; pad_left 17 '最低／最高'; printf '  '; pad_left 23 '路由型态'; printf '  '; pad_left 8 '状态'; printf '\n'
   for file in "$RESULT_DIR"/*.tsv; do
     idx=$(basename "$file" .tsv)
     IFS=$'\t' read -r family prov isp loss avg jitter p95 min max received status host ipaddr sent < "$file"
@@ -820,7 +834,7 @@ show_tcp_results() {
     printf '  '; printf '%b' "$ac"; pad_left 9 "$(metric_text "$p95" 'ms')"; printf '%b' "$NC"
     if [ "$min" = "-" ]; then line="-"; else line="${min}/${max}ms"; fi
     printf '  '; printf '%b' "$ac"; pad_left 17 "$line"; printf '%b' "$NC"
-    printf '  '; printf '%b' "$CYAN"; pad_left 13 "$route_type"; printf '%b' "$NC"
+    printf '  '; printf '%b' "$CYAN"; pad_left 23 "$route_type"; printf '%b' "$NC"
     printf '  '; [ "$status" = "正常" ] && printf '%b' "$GREEN" || printf '%b' "$YELLOW"; pad_left 8 "$status"; printf '%b\n' "$NC"
   done
   echo
@@ -1066,7 +1080,7 @@ for row in rows if isinstance(rows, list) else []:
         continue
     fields = [str(row.get("id", "-")), str(row.get("sponsor", "-")),
               str(row.get("name", "-")), str(row["url"]), host,
-              str(port), origin, base, f"{d:.1f}", "-", "OoklaHTTP"]
+              str(port), origin, base, f"{d:.1f}", "-", "OoklaHTTP", "-"]
     found.append((d, fields))
 
 for _, fields in sorted(found, key=lambda item: item[0])[:8]:
@@ -1090,13 +1104,27 @@ speedtest_cn_http_candidates() {
   local prov="$1" isp="$2" file
   file=$(ensure_speedtest_cn_catalog) || return 1
   python3 - "$file" "$prov" "$isp" <<'PY'
-import csv, sys
+import csv, ipaddress, re, sys
 from urllib.parse import urlsplit
 
 path, province, isp = sys.argv[1:]
 catalog_province = "湖北" if province == "武汉" else province
 seen = set()
 found = []
+
+def ip_hint(host):
+    try:
+        return str(ipaddress.ip_address(host))
+    except ValueError:
+        pass
+    match = re.fullmatch(r"node-([0-9]{1,3}(?:-[0-9]{1,3}){3})\.speedtest\.cn", host)
+    if match:
+        candidate = match.group(1).replace("-", ".")
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            pass
+    return "-"
 try:
     stream = open(path, newline="", encoding="utf-8-sig", errors="replace")
 except OSError:
@@ -1129,7 +1157,7 @@ with stream:
         high_speed = row.get("high_speed", "0").strip() == "1"
         fields = [row.get("id", "-"), row.get("sponsor", "speedtest.cn"),
                   row.get("city", "-"), upload, host, str(port), origin,
-                  base, row.get("distance", "-"), download, "SpeedtestCN"]
+                  base, row.get("distance", "-"), download, "SpeedtestCN", ip_hint(host)]
         found.append((not preferred, not high_speed, fields))
 for _, _, fields in sorted(found)[:10]:
     print("\t".join((value or "-").replace("\t", " ").replace("\n", " ") for value in fields))
@@ -1203,7 +1231,8 @@ with stream:
         base = f"{origin}/speedtest"
         fields = [sid or "-", supplier or "speedtest.net", city or "-",
                   f"{base}/upload.php", host, port, origin, base, "-",
-                  f"{base}/random4000x4000.jpg", "SpeedtestNetDaily"]
+                  f"{base}/random4000x4000.jpg", "SpeedtestNetDaily",
+                  row.get("ip", "").strip() or "-"]
         print("\t".join(value.replace("\t", " ").replace("\n", " ") for value in fields))
 PY
 }
@@ -1238,6 +1267,25 @@ audit_direct_catalogs() {
 # 分别解析 A／AAAA 并验证下载、上传，无法连接时不会生成速度值。
 known_direct_http_candidates() {
   local prov="$1" isp="$2"
+  if [ "$prov" = "浙江" ]; then
+    case "$isp" in
+      电信)
+        printf '%s\n' \
+          $'59386-hangzhou-8080\t浙江电信\t杭州\thttp://cesu-hz.zjtelecom.com.cn:8080/speedtest/upload.php\tcesu-hz.zjtelecom.com.cn\t8080\thttp://cesu-hz.zjtelecom.com.cn:8080\thttp://cesu-hz.zjtelecom.com.cn:8080/speedtest\t0\thttp://cesu-hz.zjtelecom.com.cn:8080/speedtest/random4000x4000.jpg\tOoklaSnapshot\t-' \
+          $'59387-ningbo-8080\t浙江电信\t宁波\thttp://cesu-nb.zjtelecom.com.cn:8080/speedtest/upload.php\tcesu-nb.zjtelecom.com.cn\t8080\thttp://cesu-nb.zjtelecom.com.cn:8080\thttp://cesu-nb.zjtelecom.com.cn:8080/speedtest\t0\thttp://cesu-nb.zjtelecom.com.cn:8080/speedtest/random4000x4000.jpg\tOoklaSnapshot\t61.153.82.77'
+        ;;
+      移动)
+        printf '%s\n' \
+          $'54312-hangzhou-8080\t浙江移动5G\t杭州\thttp://speedtest.139play.com:8080/speedtest/upload.php\tspeedtest.139play.com\t8080\thttp://speedtest.139play.com:8080\thttp://speedtest.139play.com:8080/speedtest\t0\thttp://speedtest.139play.com:8080/speedtest/random4000x4000.jpg\tOoklaSnapshot\t-'
+        ;;
+    esac
+    return 0
+  fi
+  if [ "$prov" = "福建" ] && [ "$isp" = "联通" ]; then
+    printf '%s\n' \
+      $'56354-fuzhou-8080\t福建联通\t福州\thttp://upload1.testspeed.cdn16.com:8080/speedtest/upload.php\tupload1.testspeed.cdn16.com\t8080\thttp://upload1.testspeed.cdn16.com:8080\thttp://upload1.testspeed.cdn16.com:8080/speedtest\t0\thttp://upload1.testspeed.cdn16.com:8080/speedtest/random4000x4000.jpg\tOoklaSnapshot\t-'
+    return 0
+  fi
   [ "$prov" = "安徽" ] || return 0
   case "$isp" in
     电信)
@@ -1295,6 +1343,29 @@ all_direct_http_candidates() {
   speedtest_http_candidates "$1" "$2" 2>/dev/null || true
   speedtest_net_http_candidates "$1" "$2" 2>/dev/null || true
   speedtest_cn_http_candidates "$1" "$2" 2>/dev/null || true
+}
+
+# 每日目录中的 Ookla 代理主机有时会失去 DNS，但同一条记录仍给出原站
+# 主机或 IPv4。保留完整字段，同时补一条去掉代理后缀的原站候选。
+expand_direct_http_candidates() {
+  local line id sponsor city upload_url host port origin base distance download_hint catalog_source ip_hint raw_host
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    printf '%s\n' "$line"
+    IFS=$'\t' read -r id sponsor city upload_url host port origin base distance download_hint catalog_source ip_hint <<< "$line"
+    case "$host" in
+      *.prod.hosts.ooklaserver.net)
+        raw_host=${host%.prod.hosts.ooklaserver.net}
+        upload_url=${upload_url//$host/$raw_host}
+        origin=${origin//$host/$raw_host}
+        base=${base//$host/$raw_host}
+        download_hint=${download_hint//$host/$raw_host}
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+          "${id}-origin" "$sponsor" "$city" "$upload_url" "$raw_host" "$port" \
+          "$origin" "$base" "$distance" "$download_hint" "${catalog_source}Origin" "${ip_hint:--}"
+        ;;
+    esac
+  done < <(all_direct_http_candidates "$1" "$2")
 }
 
 resolve_speedtest_host() {
@@ -1538,21 +1609,27 @@ run_nearest_ipv6_speed_row() {
 
 run_direct_http_speed_row() {
   local family="$1" prov="$2" isp="$3" source
-  local id sponsor city upload_url host port origin base distance download_hint catalog_source
+  local id sponsor city upload_url host port origin base distance download_hint catalog_source ip_hint
   local ipaddr candidate_seen=0 resolve_seen=0 tested=0
   local work transport_work drc dmeta dss down dlat dummy dstatus urc umeta uss up ulat retrans ustatus
   local download_url download_hint_url upload_test_url upload_mode upload_modes failure status latency
-  local original_scheme transport scheme variant_port variant_kind variant_origin variant_base variant_source
+  local original_scheme alternate_scheme transport scheme variant_port variant_kind variant_origin variant_base variant_source
   local prc pmeta popen transport_key path_index
   local last_status='' saved_down='' saved_dlat='' saved_engine=''
   local -A transport_seen=()
   if [ "$family" = "4" ]; then source="$SOURCE_IPV4"; else source="$SOURCE_IPV6"; fi
   [ -n "$source" ] || { printf '%s' "-|-|-|-|无本地IPv${family}|direct-http"; return; }
   audit_direct_catalogs "$family" "$prov" "$isp"
-  while IFS=$'\t' read -r id sponsor city upload_url host port origin base distance download_hint catalog_source; do
+  while IFS=$'\t' read -r id sponsor city upload_url host port origin base distance download_hint catalog_source ip_hint; do
     [ -n "$host" ] || continue
     candidate_seen=$((candidate_seen + 1))
     ipaddr=$(resolve_speedtest_host "$family" "$host" 2>/dev/null || true)
+    if [ -z "$ipaddr" ] && [ "$family" = "4" ] &&
+       [[ "${ip_hint:-}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+      ipaddr="$ip_hint"
+      printf 'IPv%s,%s,%s,%s,%s,%s,%s,解析,使用目录IPv4备援\n' \
+        "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" "$ipaddr" >> "$SPEED_AUDIT_CSV"
+    fi
     if [ -z "$ipaddr" ]; then
       printf 'IPv%s,%s,%s,%s,%s,%s,-,解析,无对应地址族\n' \
         "$family" "$prov" "$isp" "${catalog_source:--}" "$id" "$host" >> "$SPEED_AUDIT_CSV"
@@ -1562,8 +1639,10 @@ run_direct_http_speed_row() {
     work="$WORK_DIR/direct-${family}-${prov}-${isp}-${id}"
     original_scheme=${origin%%://*}
     case "$original_scheme" in http|https) ;; *) original_scheme=http ;; esac
+    if [ "$original_scheme" = "http" ]; then alternate_scheme=https; else alternate_scheme=http; fi
     for transport in \
       "${original_scheme}|${port}|original" \
+      "${alternate_scheme}|${port}|scheme-fallback" \
       'http|80|fallback' 'https|443|fallback' \
       'http|8080|fallback' 'https|8080|fallback'; do
       IFS='|' read -r scheme variant_port variant_kind <<< "$transport"
@@ -1649,7 +1728,7 @@ run_direct_http_speed_row() {
       printf 'IPv%s,%s,%s,%s,%s@%s-%s,%s,%s,上传,%s\n' \
         "$family" "$prov" "$isp" "$variant_source" "$id" "$scheme" "$variant_port" "$host" "$ipaddr" "$failure" >> "$SPEED_AUDIT_CSV"
     done
-  done < <(all_direct_http_candidates "$prov" "$isp")
+  done < <(expand_direct_http_candidates "$prov" "$isp")
   if [ -n "$saved_down" ]; then
     printf '%s' "-|-|${saved_down}|${saved_dlat}|仅下载可用：${last_status:-上传失败}|${saved_engine}"
   elif [ "$candidate_seen" -eq 0 ]; then
@@ -1963,7 +2042,7 @@ print_speed_result_row() {
 run_speedtests() {
   local family prov isp result retrans up down latency status engine current
   local direct_status direct_engine fallback_status fallback_engine direct_short fallback_short
-  local completed=0 total displayed=0 attempted=0 persist
+  local completed=0 total displayed=0 attempted=0 hidden=0 persist
   SPEED_CSV="$OUTPUT_DIR/single-thread-speed.csv"
   SPEED_AUDIT_CSV="$OUTPUT_DIR/endpoint-audit.csv"
   SPEED_EXECUTED=1
@@ -1971,7 +2050,7 @@ run_speedtests() {
   printf '\xEF\xBB\xBF协议,省份,运营商,目录来源,端点ID,域名,解析地址,阶段,结果\n' > "$SPEED_AUDIT_CSV"
   total=0
   if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "4" ]; then
-    for prov in "${PROVINCE_ORDER[@]}"; do
+    for prov in "${SPEED_PROVINCE_ORDER[@]}"; do
       selected_province "$prov" || continue
       total=$((total + 3))
     done
@@ -1980,7 +2059,7 @@ run_speedtests() {
     total=$((total + 1))
   fi
   echo -e "${BOLD}${CYAN}十地区 IPv4 三网＋IPv6 最近端点单线程测速${NC}"
-  echo -e "${DIM}逐项显示全部尝试；只有取得真实下载数据的项目写入主结果。单连接、不限制 Mbps。${NC}"
+  echo -e "${DIM}后台逐项尝试；主表只显示取得真实下载数据的项目。单连接、不限制 Mbps。${NC}"
   if [ "$total" -eq 0 ]; then
     echo -e "${YELLOW}所选范围没有可执行的吞吐项目。${NC}"
     echo
@@ -1991,7 +2070,7 @@ run_speedtests() {
   printf '  '; pad_left 5 '协议'; printf '  '; pad_left 10 '地区线路'; printf '  '; pad_left 9 '回程重传'; printf '  '; pad_left 10 '回程速度'; printf '  '; pad_left 10 '去程速度'; printf '  '; pad_left 11 '节点延迟'; printf '  '; pad_left 18 '状态'; printf '\n'
   if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "4" ]; then
     family=4
-    for prov in "${PROVINCE_ORDER[@]}"; do
+    for prov in "${SPEED_PROVINCE_ORDER[@]}"; do
       selected_province "$prov" || continue
       for isp in 电信 联通 移动; do
         current="IPv${family} ${prov}${isp}"
@@ -2021,7 +2100,11 @@ run_speedtests() {
         if [ -n "$down" ] && [ "$down" != "-" ] && [ "$down" != "failed" ]; then
           persist=1; displayed=$((displayed + 1))
         fi
-        print_speed_result_row "$family" "$prov" "$isp" "$retrans" "$up" "$down" "$latency" "$status" "$engine" "$persist"
+        if [ "$persist" -eq 1 ]; then
+          print_speed_result_row "$family" "$prov" "$isp" "$retrans" "$up" "$down" "$latency" "$status" "$engine" 1
+        else
+          hidden=$((hidden + 1))
+        fi
         completed=$((completed + 1))
         render_progress "单线程测速" "$completed" "$total" "完成 ${current}"
       done
@@ -2041,12 +2124,16 @@ run_speedtests() {
     if [ -n "$down" ] && [ "$down" != "-" ] && [ "$down" != "failed" ]; then
       persist=1; displayed=$((displayed + 1))
     fi
-    print_speed_result_row 6 "最近" "端点" "$retrans" "$up" "$down" "$latency" "$status" "$engine" "$persist"
+    if [ "$persist" -eq 1 ]; then
+      print_speed_result_row 6 "最近" "端点" "$retrans" "$up" "$down" "$latency" "$status" "$engine" 1
+    else
+      hidden=$((hidden + 1))
+    fi
     completed=$((completed + 1))
     render_progress "单线程测速" "$completed" "$total" "完成 ${current}"
   fi
   finish_progress "单线程测速" "$total" "全部完成"
-  echo -e "${DIM}共尝试 ${attempted} 项；主结果保留 ${displayed} 项有效下载数据；失败明细见 endpoint-audit.csv。${NC}"
+  echo -e "${DIM}共尝试 ${attempted} 项；主表显示 ${displayed} 项有效下载数据，隐藏 ${hidden} 项失败；明细见 endpoint-audit.csv。${NC}"
   echo
 }
 
@@ -2137,7 +2224,7 @@ main() {
     run_speedtests
   fi
   write_summary
-  echo -e "${DIM}注：Zstatic 测十地区 60 组 TCP 品质；路由型态依据实际 ASN 跳点，证据不足标为未确定。${NC}"
+  echo -e "${DIM}注：Zstatic 测十地区 60 组 TCP 品质；未定型线路会附实际 ASN，完全无证据时明确标示。${NC}"
   echo -e "${DIM}吞吐终端显示全部逐项尝试，主结果仅保留取得下载数据的项目；失败细节见 endpoint-audit.csv。${NC}"
   echo -e "${GREEN}结果已保存：$OUTPUT_DIR${NC}"
 }
