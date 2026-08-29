@@ -30,9 +30,12 @@ awk -F, '
   END {exit bad}
 ' "$TEST_TMP/dual/tcp-quality.csv"
 grep -q 'TCP 探测.*100%  60/60.*全部完成' "$TEST_TMP/dual-terminal.txt"
-grep -q '丢包色阶：0–10% 亮绿.*>10–20% 亮黄.*>20–30% 粉红.*>30% 亮红' "$TEST_TMP/dual-terminal.txt"
-grep -q '延迟色阶：≤100ms 亮绿.*>100–150ms 黄绿.*>150–200ms 粉红.*>200ms 亮红' "$TEST_TMP/dual-terminal.txt"
+grep -q '丢包色阶：0–3% 深绿.*>3–10% 亮绿.*>10–20% 黄绿.*>20–30% 琥珀.*>30% 红色' "$TEST_TMP/dual-terminal.txt"
+grep -q '延迟色阶：≤100ms 深绿.*>100–150ms 亮绿.*>150–200ms 黄绿.*>200–300ms 琥珀.*>300ms 红色' "$TEST_TMP/dual-terminal.txt"
 grep -q '最低.*最高.*路由型态.*状态' "$TEST_TMP/dual-terminal.txt"
+[ "$(grep -c '░▒▓.*IPv[46] 电信.*▓▒░' "$TEST_TMP/dual-terminal.txt")" -eq 2 ]
+[ "$(grep -c '░▒▓.*IPv[46] 联通.*▓▒░' "$TEST_TMP/dual-terminal.txt")" -eq 2 ]
+[ "$(grep -c '░▒▓.*IPv[46] 移动.*▓▒░' "$TEST_TMP/dual-terminal.txt")" -eq 2 ]
 
 MOCK_NO_IPV6=1 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
   --count 5 --parallel 4 --no-color --output "$TEST_TMP/no-ipv6" > "$TEST_TMP/no-ipv6-terminal.txt"
@@ -63,7 +66,7 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(awk -F, 'NR>1 && $11==60{n++}END{print n+0}' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
 [ "$(grep -c ',1.67,' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
-grep -q 'CN TCP.*Network Quality Benchmark (V1.14.3)' "$TEST_TMP/adaptive-terminal.txt"
+grep -q 'CN TCP.*Network Quality Benchmark (V1.14.4)' "$TEST_TMP/adaptive-terminal.txt"
 grep -q '██████╗.*███╗.*██╗' "$TEST_TMP/adaptive-terminal.txt"
 
 MOCK_UNKNOWN_ROUTE=1 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
