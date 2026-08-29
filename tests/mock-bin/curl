@@ -24,9 +24,9 @@ fi
 
 if [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] && [[ "$url" == *'/api/js/servers?'* ]]; then
   payload='[
-    {"id":"ah-ct","sponsor":"China Telecom AnHui 5G","name":"Hefei","cc":"CN","lat":"31.8667","lon":"117.2833","host":"ct.example:8080","url":"http://ct.example:8080/speedtest/upload.php"},
-    {"id":"ah-cu","sponsor":"China Unicom Anhui","name":"Hefei","cc":"CN","lat":"31.8667","lon":"117.2833","host":"cu.example:8080","url":"http://cu.example:8080/speedtest/upload.php"},
-    {"id":"ah-cm","sponsor":"China Mobile Anhui","name":"Hefei","cc":"CN","lat":"31.8667","lon":"117.2833","host":"cm.example:8080","url":"http://cm.example:8080/speedtest/upload.php"}
+    {"id":"bj-ct","sponsor":"China Telecom Beijing","name":"Beijing","cc":"CN","lat":"39.9042","lon":"116.4074","host":"ct.example:8080","url":"http://ct.example:8080/speedtest/upload.php"},
+    {"id":"bj-cu","sponsor":"China Unicom Beijing","name":"Beijing","cc":"CN","lat":"39.9042","lon":"116.4074","host":"cu.example:8080","url":"http://cu.example:8080/speedtest/upload.php"},
+    {"id":"bj-cm","sponsor":"China Mobile Beijing","name":"Beijing","cc":"CN","lat":"39.9042","lon":"116.4074","host":"cm.example:8080","url":"http://cm.example:8080/speedtest/upload.php"}
   ]'
   if [ -n "$output" ] && [ "$output" != "/dev/null" ]; then
     printf '%s\n' "$payload" > "$output"
@@ -38,9 +38,9 @@ fi
 
 if [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ] && [[ "$url" == *'/speedtest.cn-CN-ID/main/CN.csv'* ]]; then
   payload='id,active,https,cros,preferred,host,country_code,province,city,ver,operator,lon,lat,times,high_speed,sponsor,sponsor_url,current_version,distance,pingUrl,downloadUrl,uploadUrl,websocketUrl
-cn-ah-ct,1,0,1,1,ct.example:8080,CN,安徽,合肥,1,电信,117.2833,31.8667,1,1,安徽电信,-,1,0,http://ct.example:8080/speedtest/ping,http://ct.example:8080/speedtest/download?size=104857600,http://ct.example:8080/speedtest/upload.php,-
-cn-ah-cu,1,0,1,1,cu.example:8080,CN,安徽,合肥,1,联通,117.2833,31.8667,1,1,安徽联通,-,1,0,http://cu.example:8080/speedtest/ping,http://cu.example:8080/speedtest/download?size=104857600,http://cu.example:8080/speedtest/upload.php,-
-cn-ah-cm,1,0,1,1,cm.example:8080,CN,安徽,合肥,1,移动,117.2833,31.8667,1,1,安徽移动,-,1,0,http://cm.example:8080/speedtest/ping,http://cm.example:8080/speedtest/download?size=104857600,http://cm.example:8080/speedtest/upload.php,-'
+cn-bj-ct,1,0,1,1,ct.example:8080,CN,北京,北京,1,电信,116.4074,39.9042,1,1,北京电信,-,1,0,http://ct.example:8080/speedtest/ping,http://ct.example:8080/speedtest/download?size=104857600,http://ct.example:8080/speedtest/upload.php,-
+cn-bj-cu,1,0,1,1,cu.example:8080,CN,北京,北京,1,联通,116.4074,39.9042,1,1,北京联通,-,1,0,http://cu.example:8080/speedtest/ping,http://cu.example:8080/speedtest/download?size=104857600,http://cu.example:8080/speedtest/upload.php,-
+cn-bj-cm,1,0,1,1,cm.example:8080,CN,北京,北京,1,移动,116.4074,39.9042,1,1,北京移动,-,1,0,http://cm.example:8080/speedtest/ping,http://cm.example:8080/speedtest/download?size=104857600,http://cm.example:8080/speedtest/upload.php,-'
   if [ -n "$output" ] && [ "$output" != "/dev/null" ]; then
     printf '%s\n' "$payload" > "$output"
   else

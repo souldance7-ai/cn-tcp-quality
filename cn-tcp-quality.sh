@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.8.2"
+VERSION="1.9.0"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 COUNT=30
@@ -17,7 +17,7 @@ RUN_SPEED=0
 SPEED_ONLY=0
 SPEED_EXECUTED=0
 SPEED_SECONDS=8
-SPEED_BYTES=$((256 * 1024 * 1024))
+SPEED_BYTES=$((1024 * 1024 * 1024))
 SPEEDTEST_GO_VERSION="${CN_TCP_SPEEDTEST_GO_VERSION:-1.8.2}"
 SPEEDTEST_BIN="${CN_TCP_SPEEDTEST_BIN:-}"
 SPEEDTEST_ENGINE="${CN_TCP_SPEEDTEST_ENGINE:-go}"
@@ -58,9 +58,9 @@ CN TCP Quality V1
   bash cn-tcp-quality.sh [选项]
 
 选项：
-  --speed             追加五省三网 IPv4／IPv6 单线程上下行测速（流量较大）
-  --speed-only        仅执行单线程测速，跳过 TCP 品质表，便于快速复测端点
-  --quick             快速模式：每节点 10 包，测速使用节流模式
+  --speed             追加北上广三网 IPv4／IPv6 单线程上下行测速（流量较大）
+  --speed-only        仅执行北上广单线程测速，跳过 TCP 品质表
+  --quick             快速模式：每节点 10 包，测速时间缩短（不限制 Mbps）
   -c, --count N       每个 TCP 节点发包数，默认 30，范围 3-100
   -p, --parallel N    并行节点数，默认 6，范围 1-15
   --province CODE     仅测指定省份，可重复：bj/sh/gd/ah/js
@@ -75,7 +75,8 @@ CN TCP Quality V1
 
 说明：
   双栈 TCP 主表覆盖北京、上海、广东、安徽、江苏三网。
-  单线程吞吐会逐项测试五省三网双栈；端点不支持时明确显示原因。
+  单线程吞吐仅测试北京、上海、广东三网双栈，共 18 组。
+  下载不设置速率上限；仅以测试时长和最大流量保护 VPS 配额。
   TCP 探测与单线程测速均显示动态进度、百分比及完成数量。
   不上传报告，不采集公网 IP，不参与排行榜。
 EOF
@@ -137,7 +138,7 @@ parse_args() {
   [ "$QUICK" -eq 0 ] || {
     [ "$COUNT_EXPLICIT" -eq 1 ] || COUNT=10
     SPEED_SECONDS=3
-    SPEED_BYTES=$((64 * 1024 * 1024))
+    SPEED_BYTES=$((256 * 1024 * 1024))
   }
   [ "$NO_COLOR" -eq 0 ] || {
     RED=""; GREEN=""; YELLOW=""; CYAN=""; BOLD=""; DIM=""; NC=""
@@ -171,7 +172,7 @@ show_banner() {
   printf '%b     ░▒▓██████████████████████████████████████▓▒░%b\n' "$GOLD_SHADOW" "$NC"
   printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' \
     "$GOLD_BRIGHT" "$NC"
-  printf '%b♣  [ 五省三网双栈检测 · TCP 丢包／延迟／抖动／P95 · 单线程测速 ]%b\n' \
+  printf '%b♣  [ 五省三网双栈 TCP 品质 · 北上广双栈单线程测速 ]%b\n' \
     "$GOLD_BRIGHT$BOLD" "$NC"
   printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' \
     "$GOLD_BRIGHT" "$NC"
@@ -1356,7 +1357,7 @@ run_speedtest_row() {
     printf '%s' "-|-|-|-|${SPEEDTEST_INSTALL_ERROR:-测速核心安装失败}|speedtest"
     return
   }
-  [ "$QUICK" -eq 0 ] || args+=(--saving-mode)
+  # 不传 --saving-mode，也不使用 curl --limit-rate；单线程按线路能力运行。
   if [ "$SPEEDTEST_ENGINE" = "go" ]; then
     location=$(speedtest_location "$prov" 2>/dev/null || true)
     keyword=$(speedtest_search_keyword "$isp" 2>/dev/null || true)
@@ -1448,15 +1449,27 @@ run_speedtests() {
   SPEED_EXECUTED=1
   printf '\xEF\xBB\xBF协议,省份,运营商,回程重传(%%),回程速度(Mbps),去程速度(Mbps),节点延迟(ms),状态,测速端点\n' > "$SPEED_CSV"
   printf '\xEF\xBB\xBF协议,省份,运营商,目录来源,端点ID,域名,解析地址,阶段,结果\n' > "$SPEED_AUDIT_CSV"
+  total=0
+  for family in 4 6; do
+    [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "$family" ] || continue
+    for prov in 北京 上海 广东; do
+      selected_province "$prov" || continue
+      total=$((total + 3))
+    done
+  done
+  echo -e "${BOLD}${CYAN}北上广三网 IPv4／IPv6 单线程测速${NC}"
+  echo -e "${DIM}每个方向仅使用一个 TCP 连接，不限制 Mbps；安徽、江苏仅保留 TCP 品质探测。${NC}"
+  if [ "$total" -eq 0 ]; then
+    echo -e "${YELLOW}所选范围不含北京、上海、广东，本次不执行吞吐测速。${NC}"
+    echo
+    return
+  fi
   discover_speedtest_sources
-  total=$(wc -l < "$PLAN_FILE" | tr -d ' ')
-  echo -e "${BOLD}${CYAN}五省三网 IPv4／IPv6 单线程测速${NC}"
-  echo -e "${DIM}每个方向仅使用一个 TCP 连接；IPv6 直连候选端点的 AAAA，不使用 Speedtest 测速核心。${NC}"
   echo
   printf '  '; pad_left 5 '协议'; printf '  '; pad_left 10 '地区线路'; printf '  '; pad_left 9 '回程重传'; printf '  '; pad_left 10 '回程速度'; printf '  '; pad_left 10 '去程速度'; printf '  '; pad_left 11 '节点延迟'; printf '  '; pad_left 18 '状态'; printf '\n'
   for family in 4 6; do
     [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "$family" ] || continue
-    for prov in 北京 上海 广东 安徽 江苏; do
+    for prov in 北京 上海 广东; do
       selected_province "$prov" || continue
       for isp in 电信 联通 移动; do
         current="IPv${family} ${prov}${isp}"
@@ -1577,7 +1590,7 @@ main() {
     run_speedtests
   fi
   write_summary
-  echo -e "${DIM}注：30 组测速均逐项执行；端点或 IP 族不受支持时会明确标注，不生成假 Mbps。${NC}"
+  echo -e "${DIM}注：TCP 品质覆盖五省 30 组；吞吐仅测北上广 18 组，单线程不限制 Mbps。${NC}"
   echo -e "${GREEN}结果已保存：$OUTPUT_DIR${NC}"
 }
 

@@ -37,7 +37,7 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(awk -F, 'NR>1 && $11==60{n++}END{print n+0}' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
 [ "$(grep -c ',1.67,' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
-grep -q 'CN TCP.*Network Quality Benchmark (V1.8.2)' "$TEST_TMP/adaptive-terminal.txt"
+grep -q 'CN TCP.*Network Quality Benchmark (V1.9.0)' "$TEST_TMP/adaptive-terminal.txt"
 grep -q '██████╗.*███╗.*██╗' "$TEST_TMP/adaptive-terminal.txt"
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
@@ -57,6 +57,7 @@ grep -q '单线程测速.*100%  6/6.*全部完成' "$TEST_TMP/speed-terminal.txt
 grep -q -- '--location=39.9042,116.4074' "$TEST_TMP/speedtest-args.txt"
 grep -q -- '--search=China Telecom' "$TEST_TMP/speedtest-args.txt"
 grep -q -- '--filter-cc=CN' "$TEST_TMP/speedtest-args.txt"
+! grep -q -- '--saving-mode' "$TEST_TMP/speedtest-args.txt"
 ! grep -q -- '--source=2001:db8::10' "$TEST_TMP/speedtest-args.txt"
 grep -q 'speedtest.net#mock(dynamic/go)' "$TEST_TMP/speed-dual/single-thread-speed.csv"
 
@@ -66,14 +67,14 @@ CN_TCP_SPEEDTEST_SOURCE6="2001:db8::10" \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
   --quick --speed --no-color --output "$TEST_TMP/speed-full" >/dev/null
 
-[ "$(wc -l < "$TEST_TMP/speed-full/single-thread-speed.csv")" -eq 31 ]
-[ "$(grep -c ',OK,' "$TEST_TMP/speed-full/single-thread-speed.csv")" -eq 15 ]
+[ "$(wc -l < "$TEST_TMP/speed-full/single-thread-speed.csv")" -eq 19 ]
+[ "$(grep -c ',OK,' "$TEST_TMP/speed-full/single-thread-speed.csv")" -eq 9 ]
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-cli.py" \
 CN_TCP_SPEEDTEST_ENGINE=cli \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
-  --province ah -4 --quick --speed --no-color --output "$TEST_TMP/speed-cli" >/dev/null
+  --province bj -4 --quick --speed --no-color --output "$TEST_TMP/speed-cli" >/dev/null
 
 [ "$(grep -c ',50.0,100.0,42,OK,' "$TEST_TMP/speed-cli/single-thread-speed.csv")" -eq 3 ]
 
@@ -81,7 +82,7 @@ CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
 MOCK_SPEEDTEST_LOW=1 \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
-  --province ah -4 --quick --speed --no-color --output "$TEST_TMP/speed-low" >/dev/null
+  --province bj -4 --quick --speed --no-color --output "$TEST_TMP/speed-low" >/dev/null
 
 [ "$(grep -c '低于0.1Mbps' "$TEST_TMP/speed-low/single-thread-speed.csv")" -eq 3 ]
 [ "$(grep -c ',OK,' "$TEST_TMP/speed-low/single-thread-speed.csv" || true)" -eq 0 ]
@@ -90,7 +91,7 @@ CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
 MOCK_DYNAMIC_FAIL=1 \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
-  --province ah -4 --quick --speed --no-color --output "$TEST_TMP/speed-static-fallback" >/dev/null
+  --province bj -4 --quick --speed --no-color --output "$TEST_TMP/speed-static-fallback" >/dev/null
 
 [ "$(grep -c ',OK,.*(static/go)$' "$TEST_TMP/speed-static-fallback/single-thread-speed.csv")" -eq 3 ]
 
@@ -98,9 +99,9 @@ MOCK_DIRECT_HTTP=1 \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
 CN_TCP_SPEEDTEST_SOURCE6="2001:db8::10" \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
-  --province ah --quick --speed --no-color --output "$TEST_TMP/direct-http-dual" >/dev/null
+  --province bj --quick --speed --no-color --output "$TEST_TMP/direct-http-dual" >/dev/null
 
-[ "$(grep -c ',OK,OoklaHTTP#ah-' "$TEST_TMP/direct-http-dual/single-thread-speed.csv")" -eq 6 ]
+[ "$(grep -c ',OK,OoklaHTTP#bj-' "$TEST_TMP/direct-http-dual/single-thread-speed.csv")" -eq 6 ]
 [ "$(grep -c '^IPv6,.*,50.0,100.0,60/50,OK,OoklaHTTP#' "$TEST_TMP/direct-http-dual/single-thread-speed.csv")" -eq 3 ]
 
 MOCK_SPEEDTEST_CN_ONLY=1 \
@@ -108,9 +109,9 @@ MOCK_SPEEDTEST_CN_STRICT=1 \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
 CN_TCP_SPEEDTEST_SOURCE6="2001:db8::10" \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
-  --province ah --quick --speed --no-color --output "$TEST_TMP/speedtest-cn-dual" >/dev/null
+  --province bj --quick --speed --no-color --output "$TEST_TMP/speedtest-cn-dual" >/dev/null
 
-[ "$(grep -c ',OK,SpeedtestCN#cn-ah-' "$TEST_TMP/speedtest-cn-dual/single-thread-speed.csv")" -eq 6 ]
+[ "$(grep -c ',OK,SpeedtestCN#cn-bj-' "$TEST_TMP/speedtest-cn-dual/single-thread-speed.csv")" -eq 6 ]
 [ "$(grep -c '^IPv6,.*,50.0,100.0,60/50,OK,SpeedtestCN#' "$TEST_TMP/speedtest-cn-dual/single-thread-speed.csv")" -eq 3 ]
 [ "$(grep -c ',双向,成功(raw)$' "$TEST_TMP/speedtest-cn-dual/endpoint-audit.csv")" -eq 6 ]
 
@@ -119,7 +120,7 @@ MOCK_IPV4_MAPPED_ONLY=1 \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
 CN_TCP_SPEEDTEST_SOURCE6="2001:db8::10" \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
-  --province ah --quick --speed-only --no-color --output "$TEST_TMP/mapped-v6" > "$TEST_TMP/mapped-v6-terminal.txt"
+  --province bj --quick --speed-only --no-color --output "$TEST_TMP/mapped-v6" > "$TEST_TMP/mapped-v6-terminal.txt"
 
 [ ! -e "$TEST_TMP/mapped-v6/tcp-quality.csv" ]
 [ "$(grep -c '^IPv4,.*,OK,SpeedtestCN#' "$TEST_TMP/mapped-v6/single-thread-speed.csv")" -eq 3 ]
@@ -127,22 +128,10 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 [ "$(grep -c '^IPv6,.*,::ffff:' "$TEST_TMP/mapped-v6/endpoint-audit.csv" || true)" -eq 0 ]
 grep -q '运行模式：仅单线程测速' "$TEST_TMP/mapped-v6-terminal.txt"
 
-MOCK_HEFEI_STATIC=1 \
-CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
-  --province ah -4 --quick --speed-only --no-color --output "$TEST_TMP/hefei-static" >/dev/null
+  --province ah --quick --speed-only --no-color --output "$TEST_TMP/anhui-speed-disabled" > "$TEST_TMP/anhui-speed-disabled.txt"
 
-[ "$(grep -c ',OK,KnownHefei#' "$TEST_TMP/hefei-static/single-thread-speed.csv")" -eq 3 ]
-[ "$(grep -c ',OK,KnownHefei#26404-' "$TEST_TMP/hefei-static/single-thread-speed.csv")" -eq 1 ]
-[ "$(grep -c ',KnownHefei,.*,双向,成功' "$TEST_TMP/hefei-static/endpoint-audit.csv")" -eq 3 ]
+[ "$(wc -l < "$TEST_TMP/anhui-speed-disabled/single-thread-speed.csv")" -eq 1 ]
+grep -q '所选范围不含北京、上海、广东' "$TEST_TMP/anhui-speed-disabled.txt"
 
-MOCK_OOKLA_ALIAS=1 \
-CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
-CN_TCP_SPEEDTEST_SOURCE6="2001:db8::10" \
-PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
-  --province ah --quick --speed-only --no-color --output "$TEST_TMP/ookla-alias" >/dev/null
-
-[ "$(grep -c ',OK,OoklaAlias#' "$TEST_TMP/ookla-alias/single-thread-speed.csv")" -eq 6 ]
-[ "$(grep -c ',OoklaAlias,.*,双向,成功' "$TEST_TMP/ookla-alias/endpoint-audit.csv")" -eq 6 ]
-
-echo "TEST PASS: syntax, banner, adaptive loss sampling, IPv6 L2 fallback, Anhui city fallback, Ookla dual-stack aliases, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, low-speed guard, and 30-row matrix."
+echo "TEST PASS: syntax, banner, five-province TCP matrix, Beijing-Shanghai-Guangdong 18-row speed scope, no rate-saving mode, IPv6 L2 fallback, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, and low-speed guard."
