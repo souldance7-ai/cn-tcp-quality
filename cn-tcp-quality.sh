@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.9.0"
+VERSION="1.10.0"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 COUNT=30
@@ -58,8 +58,8 @@ CN TCP Quality V1
   bash cn-tcp-quality.sh [选项]
 
 选项：
-  --speed             追加北上广三网 IPv4／IPv6 单线程上下行测速（流量较大）
-  --speed-only        仅执行北上广单线程测速，跳过 TCP 品质表
+  --speed             追加北上广 IPv4 三网＋IPv6 最近端点单线程测速（流量较大）
+  --speed-only        仅执行单线程测速，跳过 TCP 品质表
   --quick             快速模式：每节点 10 包，测速时间缩短（不限制 Mbps）
   -c, --count N       每个 TCP 节点发包数，默认 30，范围 3-100
   -p, --parallel N    并行节点数，默认 6，范围 1-15
@@ -75,7 +75,8 @@ CN TCP Quality V1
 
 说明：
   双栈 TCP 主表覆盖北京、上海、广东、安徽、江苏三网。
-  单线程吞吐仅测试北京、上海、广东三网双栈，共 18 组。
+  单线程吞吐测试北上广 IPv4 三网 9 组，并另测 1 个 IPv6 最近端点。
+  IPv6 强制原生 AAAA 与 curl -6，不套用省份或运营商标签。
   下载不设置速率上限；仅以测试时长和最大流量保护 VPS 配额。
   TCP 探测与单线程测速均显示动态进度、百分比及完成数量。
   不上传报告，不采集公网 IP，不参与排行榜。
@@ -172,7 +173,7 @@ show_banner() {
   printf '%b     ░▒▓██████████████████████████████████████▓▒░%b\n' "$GOLD_SHADOW" "$NC"
   printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' \
     "$GOLD_BRIGHT" "$NC"
-  printf '%b♣  [ 五省三网双栈 TCP 品质 · 北上广双栈单线程测速 ]%b\n' \
+  printf '%b♣  [ 五省三网双栈 TCP 品质 · 北上广 IPv4／IPv6 近端测速 ]%b\n' \
     "$GOLD_BRIGHT$BOLD" "$NC"
   printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' \
     "$GOLD_BRIGHT" "$NC"
@@ -1096,6 +1097,60 @@ parse_direct_http_metric() {
   printf '%s|%s|%s|%s' "$mbps" "$latency" "$retrans" "$status"
 }
 
+run_nearest_ipv6_speed_row() {
+  local host="speed.cloudflare.com" port="443" source="$SOURCE_IPV6" ipaddr work
+  local download_url upload_url drc dmeta dss down dlat dummy dstatus
+  local urc umeta uss up ulat retrans ustatus failure status
+  ipaddr=$(resolve_speedtest_host 6 "$host" 2>/dev/null || true)
+  if [ -z "$ipaddr" ]; then
+    printf 'IPv6,最近,端点,CloudflareEdge,nearest-v6,%s,-,解析,无原生AAAA地址\n' \
+      "$host" >> "$SPEED_AUDIT_CSV"
+    printf '%s' '-|-|-|-|近端测速服务无原生AAAA|Cloudflare近端'
+    return
+  fi
+  if [ -z "$source" ]; then
+    source=$(ip -6 route get "$ipaddr" 2>/dev/null |
+      sed -nE 's/.*[[:space:]]src[[:space:]]+([^[:space:]]+).*/\1/p' | head -1)
+    SOURCE_IPV6="$source"
+  fi
+  if [ -z "$source" ]; then
+    printf 'IPv6,最近,端点,CloudflareEdge,nearest-v6,%s,%s,路由,无可用IPv6来源地址\n' \
+      "$host" "$ipaddr" >> "$SPEED_AUDIT_CSV"
+    printf '%s' '-|-|-|-|本机无IPv6来源地址|Cloudflare近端'
+    return
+  fi
+
+  work="$WORK_DIR/nearest-ipv6-cloudflare"
+  download_url="https://${host}/__down?bytes=${SPEED_BYTES}&measId=cn-tcp-${RANDOM}"
+  upload_url="https://${host}/__up"
+  IFS='|' read -r drc dmeta dss <<<"$(direct_http_download 6 "$source" "$host" "$port" "$ipaddr" "$download_url" "$work")"
+  IFS='|' read -r down dlat dummy dstatus <<<"$(parse_direct_http_metric download "$drc" "$dmeta" "$dss")"
+  if [ "$dstatus" != "OK" ]; then
+    failure=$(direct_failure_detail "${drc:-1}" "${dmeta:-/dev/null}" "$work.download.err")
+    status=$(direct_failure_status "下载" "${drc:-1}" "${dmeta:-/dev/null}")
+    printf 'IPv6,最近,端点,CloudflareEdge,nearest-v6,%s,%s,下载,%s\n' \
+      "$host" "$ipaddr" "$failure" >> "$SPEED_AUDIT_CSV"
+    printf '%s' "-|-|-|-|${status}|Cloudflare近端#${ipaddr}"
+    return
+  fi
+
+  IFS='|' read -r urc umeta uss <<<"$(direct_http_upload 6 "$source" "$host" "$port" "$ipaddr" "$upload_url" "$work" raw)"
+  IFS='|' read -r up ulat retrans ustatus <<<"$(parse_direct_http_metric upload "$urc" "$umeta" "$uss")"
+  if [ "$ustatus" != "OK" ]; then
+    failure=$(direct_failure_detail "${urc:-1}" "${umeta:-/dev/null}" "$work.upload.err")
+    status=$(direct_failure_status "上传" "${urc:-1}" "${umeta:-/dev/null}")
+    printf 'IPv6,最近,端点,CloudflareEdge,nearest-v6,%s,%s,上传,%s\n' \
+      "$host" "$ipaddr" "$failure" >> "$SPEED_AUDIT_CSV"
+    printf '%s' "-|-|${down}|${dlat}|仅下载可用：${status}|Cloudflare近端#${ipaddr}"
+    return
+  fi
+
+  printf 'IPv6,最近,端点,CloudflareEdge,nearest-v6,%s,%s,双向,成功(raw)\n' \
+    "$host" "$ipaddr" >> "$SPEED_AUDIT_CSV"
+  printf '%s|%s|%s|%s/%s|OK|Cloudflare近端#%s' \
+    "$retrans" "$up" "$down" "$ulat" "$dlat" "$ipaddr"
+}
+
 run_direct_http_speed_row() {
   local family="$1" prov="$2" isp="$3" source
   local id sponsor city upload_url host port origin base distance download_hint catalog_source
@@ -1450,64 +1505,73 @@ run_speedtests() {
   printf '\xEF\xBB\xBF协议,省份,运营商,回程重传(%%),回程速度(Mbps),去程速度(Mbps),节点延迟(ms),状态,测速端点\n' > "$SPEED_CSV"
   printf '\xEF\xBB\xBF协议,省份,运营商,目录来源,端点ID,域名,解析地址,阶段,结果\n' > "$SPEED_AUDIT_CSV"
   total=0
-  for family in 4 6; do
-    [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "$family" ] || continue
+  if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "4" ]; then
     for prov in 北京 上海 广东; do
       selected_province "$prov" || continue
       total=$((total + 3))
     done
-  done
-  echo -e "${BOLD}${CYAN}北上广三网 IPv4／IPv6 单线程测速${NC}"
-  echo -e "${DIM}每个方向仅使用一个 TCP 连接，不限制 Mbps；安徽、江苏仅保留 TCP 品质探测。${NC}"
+  fi
+  if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "6" ]; then
+    total=$((total + 1))
+  fi
+  echo -e "${BOLD}${CYAN}北上广 IPv4 三网＋IPv6 最近端点单线程测速${NC}"
+  echo -e "${DIM}IPv4 保留北上广 9 组；IPv6 强制 curl -6 自动连接最近边缘；单连接、不限制 Mbps。${NC}"
   if [ "$total" -eq 0 ]; then
-    echo -e "${YELLOW}所选范围不含北京、上海、广东，本次不执行吞吐测速。${NC}"
+    echo -e "${YELLOW}IPv4 所选范围不含北京、上海、广东，本次不执行吞吐测速。${NC}"
     echo
     return
   fi
   discover_speedtest_sources
   echo
   printf '  '; pad_left 5 '协议'; printf '  '; pad_left 10 '地区线路'; printf '  '; pad_left 9 '回程重传'; printf '  '; pad_left 10 '回程速度'; printf '  '; pad_left 10 '去程速度'; printf '  '; pad_left 11 '节点延迟'; printf '  '; pad_left 18 '状态'; printf '\n'
-  for family in 4 6; do
-    [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "$family" ] || continue
+  if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "4" ]; then
+    family=4
     for prov in 北京 上海 广东; do
       selected_province "$prov" || continue
       for isp in 电信 联通 移动; do
         current="IPv${family} ${prov}${isp}"
         render_progress "单线程测速" "$completed" "$total" "$current"
-        if [ "$family" = "6" ] && [ "$IPV6_OK" -ne 1 ]; then
-          retrans='-'; up='-'; down='-'; latency='-'; status='本机无IPv6，跳过'; engine='-'
-        else
-          result=""
-          if [ "$family" = "4" ] && [[ "$prov" =~ ^(北京|上海|广东)$ ]]; then
-            result=$(run_tos_speed_row "$prov" "$isp")
-            IFS='|' read -r retrans up down latency status engine <<< "$result"
-            [ "$status" = "OK" ] || result=""
-          fi
-          if [ -z "$result" ]; then
-            result=$(run_direct_http_speed_row "$family" "$prov" "$isp")
-            IFS='|' read -r retrans up down latency status engine <<< "$result"
-            if [ "$status" != "OK" ] && [[ "$status" != 仅下载可用* ]] && [ "$family" = "4" ]; then
-              direct_status="$status"; direct_engine="$engine"
-              result=$(run_speedtest_row "$family" "$prov" "$isp")
-              IFS='|' read -r retrans up down latency fallback_status fallback_engine <<< "$result"
-              if [ "$fallback_status" != "OK" ]; then
-                direct_short=$(compact_speed_status "$direct_status")
-                fallback_short=$(compact_speed_status "$fallback_status")
-                status="直连${direct_short}；${fallback_short}"
-                engine="${direct_engine}+${fallback_engine}"
-                result="-|-|-|-|${status}|${engine}"
-              fi
+        result=$(run_tos_speed_row "$prov" "$isp")
+        IFS='|' read -r retrans up down latency status engine <<< "$result"
+        [ "$status" = "OK" ] || result=""
+        if [ -z "$result" ]; then
+          result=$(run_direct_http_speed_row 4 "$prov" "$isp")
+          IFS='|' read -r retrans up down latency status engine <<< "$result"
+          if [ "$status" != "OK" ] && [[ "$status" != 仅下载可用* ]]; then
+            direct_status="$status"; direct_engine="$engine"
+            result=$(run_speedtest_row 4 "$prov" "$isp")
+            IFS='|' read -r retrans up down latency fallback_status fallback_engine <<< "$result"
+            if [ "$fallback_status" != "OK" ]; then
+              direct_short=$(compact_speed_status "$direct_status")
+              fallback_short=$(compact_speed_status "$fallback_status")
+              status="直连${direct_short}；${fallback_short}"
+              engine="${direct_engine}+${fallback_engine}"
+              result="-|-|-|-|${status}|${engine}"
             fi
           fi
-          IFS='|' read -r retrans up down latency status engine <<< "$result"
         fi
+        IFS='|' read -r retrans up down latency status engine <<< "$result"
         clear_progress
         print_speed_result_row "$family" "$prov" "$isp" "$retrans" "$up" "$down" "$latency" "$status" "$engine"
         completed=$((completed + 1))
         render_progress "单线程测速" "$completed" "$total" "完成 ${current}"
       done
     done
-  done
+  fi
+  if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "6" ]; then
+    current="IPv6 最近端点"
+    render_progress "单线程测速" "$completed" "$total" "$current"
+    if [ "$IPV6_OK" -ne 1 ]; then
+      retrans='-'; up='-'; down='-'; latency='-'; status='本机无IPv6，跳过'; engine='-'
+    else
+      result=$(run_nearest_ipv6_speed_row)
+      IFS='|' read -r retrans up down latency status engine <<< "$result"
+    fi
+    clear_progress
+    print_speed_result_row 6 "最近" "端点" "$retrans" "$up" "$down" "$latency" "$status" "$engine"
+    completed=$((completed + 1))
+    render_progress "单线程测速" "$completed" "$total" "完成 ${current}"
+  fi
   finish_progress "单线程测速" "$total" "全部完成"
   echo
 }
@@ -1590,7 +1654,7 @@ main() {
     run_speedtests
   fi
   write_summary
-  echo -e "${DIM}注：TCP 品质覆盖五省 30 组；吞吐仅测北上广 18 组，单线程不限制 Mbps。${NC}"
+  echo -e "${DIM}注：TCP 品质覆盖五省 30 组；吞吐测北上广 IPv4 9 组＋IPv6 最近端点 1 组，单线程不限制 Mbps。${NC}"
   echo -e "${GREEN}结果已保存：$OUTPUT_DIR${NC}"
 }
 

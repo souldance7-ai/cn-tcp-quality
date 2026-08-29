@@ -22,6 +22,16 @@ if [ "${MOCK_HEFEI_STATIC:-0}" != "1" ]; then
   esac
 fi
 
+if [[ "$url" == *'speed.cloudflare.com/__down?'* ]]; then
+  printf '200|16777216|25000000|0.030|1.000|1'
+  exit 0
+fi
+
+if [ "$is_upload" -eq 1 ] && [[ "$url" == *'speed.cloudflare.com/__up'* ]]; then
+  printf '200|16777216|12500000|0.040|1.000|1'
+  exit 0
+fi
+
 if [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] && [[ "$url" == *'/api/js/servers?'* ]]; then
   payload='[
     {"id":"bj-ct","sponsor":"China Telecom Beijing","name":"Beijing","cc":"CN","lat":"39.9042","lon":"116.4074","host":"ct.example:8080","url":"http://ct.example:8080/speedtest/upload.php"},
