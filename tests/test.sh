@@ -38,7 +38,7 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(awk -F, 'NR>1 && $11==60{n++}END{print n+0}' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
 [ "$(grep -c ',1.67,' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
-grep -q 'CN TCP.*Network Quality Benchmark (V1.11.1)' "$TEST_TMP/adaptive-terminal.txt"
+grep -q 'CN TCP.*Network Quality Benchmark (V1.11.2)' "$TEST_TMP/adaptive-terminal.txt"
 grep -q '██████╗.*███╗.*██╗' "$TEST_TMP/adaptive-terminal.txt"
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
@@ -149,4 +149,13 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 [ "$(grep '/api/js/servers?' "$TEST_TMP/anhui-catalog-urls.txt" | sort -u | wc -l)" -eq 6 ]
 [ "$(grep -c 'OoklaHTTP.*neighbor-js' "$TEST_TMP/anhui-speed-enabled/endpoint-audit.csv" || true)" -eq 0 ]
 
-echo "TEST PASS: syntax, banner, runtime Zstatic audit, five-province TCP matrix, multi-city discovery, five-province IPv4 plus nearest native IPv6 speed scope, Cloudflare same-origin headers, upload no-response acceptance, IPv6 L2 fallback, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, and 0.1Mbps guard."
+MOCK_SPEEDTEST_NET_ONLY=1 \
+CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \
+PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
+  --province js -4 --quick --speed-only --no-color --output "$TEST_TMP/speedtest-net-daily" >/dev/null
+
+grep -q '^IPv4,江苏,移动,.*,OK,SpeedtestNetDaily#16204:' "$TEST_TMP/speedtest-net-daily/single-thread-speed.csv"
+grep -q '^IPv4,江苏,移动,SpeedtestNetDaily,-,-,-,目录,匹配同省同运营商候选1个$' "$TEST_TMP/speedtest-net-daily/endpoint-audit.csv"
+grep -q "江苏\\|移动) printf '16204 40131 32291 34559 17320" "$ROOT/cn-tcp-quality.sh"
+
+echo "TEST PASS: syntax, banner, runtime Zstatic audit, three-catalog and multi-city discovery, five-province IPv4 plus nearest native IPv6 speed scope, Cloudflare same-origin headers, upload no-response acceptance, IPv6 L2 fallback, redirected/raw SpeedtestCN, IPv4-mapped rejection, speed-only mode, IPv4 fallback, and 0.1Mbps guard."

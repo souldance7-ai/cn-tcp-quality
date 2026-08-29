@@ -6,9 +6,10 @@
 
 set -uo pipefail
 
-VERSION="1.11.1"
+VERSION="1.11.2"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
+SPEEDTEST_NET_CATALOG_URL="${CN_TCP_SPEEDTEST_NET_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.net-CN-ID/main/CN.csv}"
 COUNT=30
 COUNT_EXPLICIT=0
 AUTO_RECHECK_COUNT=60
@@ -957,6 +958,98 @@ for _, _, fields in sorted(found)[:10]:
 PY
 }
 
+ensure_speedtest_net_catalog() {
+  local file="$WORK_DIR/speedtest-net-cn.csv"
+  if [ -s "$file" ] && head -1 "$file" 2>/dev/null | grep -q '^id,country_code,country,city,ip,host,port,supplier'; then
+    printf '%s' "$file"
+    return 0
+  fi
+  curl -fsSL --retry 2 --connect-timeout 8 --max-time 30 \
+    -A "$HTTP_USER_AGENT" "$SPEEDTEST_NET_CATALOG_URL" -o "$file" 2>/dev/null || return 1
+  head -1 "$file" 2>/dev/null | grep -q '^id,country_code,country,city,ip,host,port,supplier' || return 1
+  printf '%s' "$file"
+}
+
+# speedtest.net-CN-ID 每日清理失效节点，可在 Ookla JS API 对境外来源拒绝
+# 或返回空目录时继续提供当前主机。这里只构造公开的单连接 HTTP 协议，
+# 后续仍必须真实完成至少 1 MiB 下载与上传才会显示 Mbps。
+speedtest_net_http_candidates() {
+  local prov="$1" isp="$2" file
+  file=$(ensure_speedtest_net_catalog) || return 1
+  python3 - "$file" "$prov" "$isp" <<'PY'
+import csv, sys
+
+path, province, isp = sys.argv[1:]
+province_cities = {
+    "北京": ("beijing",),
+    "上海": ("shanghai",),
+    "广东": ("guangzhou", "shenzhen", "foshan", "dongguan", "zhongshan", "zhuhai", "huizhou"),
+    "安徽": ("hefei", "wuhu", "bengbu", "fuyang", "anqing", "huainan", "chuzhou", "huangshan"),
+    "江苏": ("nanjing", "suzhou", "wuxi", "xuzhou", "nantong", "changzhou", "zhenjiang", "yangzhou", "lianyungang", "kunshan"),
+}
+operator_aliases = {
+    "电信": ("china telecom", "telecom", "chinanet", "ctgnet"),
+    "联通": ("china unicom", "unicom", "china169"),
+    "移动": ("china mobile", "cmcc", "jsqy"),
+}
+# 部分当前目录使用企业简称，ID 的运营商归属由同日 Speedtest.cn 目录交叉核对。
+known_operator = {"16204": "移动"}
+seen = set()
+try:
+    stream = open(path, newline="", encoding="utf-8-sig", errors="replace")
+except OSError:
+    raise SystemExit(1)
+with stream:
+    for row in csv.DictReader(stream):
+        if row.get("country", "").strip().lower() != "china":
+            continue
+        city = row.get("city", "").strip()
+        if city.lower() not in province_cities.get(province, ()):
+            continue
+        sid = row.get("id", "").strip()
+        supplier = row.get("supplier", "").strip()
+        text = supplier.lower()
+        if known_operator.get(sid) != isp and not any(x in text for x in operator_aliases.get(isp, ())):
+            continue
+        host = row.get("host", "").strip()
+        port = row.get("port", "").strip() or "8080"
+        if not host or (host, port) in seen:
+            continue
+        seen.add((host, port))
+        origin = f"http://{host}:{port}"
+        base = f"{origin}/speedtest"
+        fields = [sid or "-", supplier or "speedtest.net", city or "-",
+                  f"{base}/upload.php", host, port, origin, base, "-",
+                  f"{base}/random4000x4000.jpg", "SpeedtestNetDaily"]
+        print("\t".join(value.replace("\t", " ").replace("\n", " ") for value in fields))
+PY
+}
+
+audit_direct_catalogs() {
+  local family="$1" prov="$2" isp="$3" source data count rc
+  [ "$family" = "4" ] || return 0
+  for source in OoklaAPI SpeedtestNetDaily SpeedtestCNDaily; do
+    case "$source" in
+      OoklaAPI) data=$(speedtest_http_candidates "$prov" "$isp" 2>/dev/null); rc=$? ;;
+      SpeedtestNetDaily) data=$(speedtest_net_http_candidates "$prov" "$isp" 2>/dev/null); rc=$? ;;
+      SpeedtestCNDaily) data=$(speedtest_cn_http_candidates "$prov" "$isp" 2>/dev/null); rc=$? ;;
+    esac
+    if [ "$rc" -ne 0 ]; then
+      printf 'IPv%s,%s,%s,%s,-,-,-,目录,获取失败\n' \
+        "$family" "$prov" "$isp" "$source" >> "$SPEED_AUDIT_CSV"
+      continue
+    fi
+    count=$(printf '%s\n' "$data" | awk 'NF{n++}END{print n+0}')
+    if [ "$count" -gt 0 ]; then
+      printf 'IPv%s,%s,%s,%s,-,-,-,目录,匹配同省同运营商候选%s个\n' \
+        "$family" "$prov" "$isp" "$source" "$count" >> "$SPEED_AUDIT_CSV"
+    else
+      printf 'IPv%s,%s,%s,%s,-,-,-,目录,无同省同运营商端点\n' \
+        "$family" "$prov" "$isp" "$source" >> "$SPEED_AUDIT_CSV"
+    fi
+  done
+}
+
 # 合肥三网端点曾长期公开在 Ookla 服务器目录中，但目前的动态目录偶尔
 # 不再返回安徽。这里保留已知主机和两套常见目录结构，实际测速前仍会
 # 分别解析 A／AAAA 并验证下载、上传，无法连接时不会生成速度值。
@@ -1017,6 +1110,7 @@ all_direct_http_candidates() {
   known_ookla_alias_candidates "$1" "$2" 2>/dev/null || true
   known_direct_http_candidates "$1" "$2" 2>/dev/null || true
   speedtest_http_candidates "$1" "$2" 2>/dev/null || true
+  speedtest_net_http_candidates "$1" "$2" 2>/dev/null || true
   speedtest_cn_http_candidates "$1" "$2" 2>/dev/null || true
 }
 
@@ -1254,6 +1348,7 @@ run_direct_http_speed_row() {
   local last_status='' saved_down='' saved_dlat='' saved_engine=''
   if [ "$family" = "4" ]; then source="$SOURCE_IPV4"; else source="$SOURCE_IPV6"; fi
   [ -n "$source" ] || { printf '%s' "-|-|-|-|无本地IPv${family}|direct-http"; return; }
+  audit_direct_catalogs "$family" "$prov" "$isp"
   while IFS=$'\t' read -r id sponsor city upload_url host port origin base distance download_hint catalog_source; do
     [ -n "$host" ] || continue
     candidate_seen=$((candidate_seen + 1))
@@ -1340,7 +1435,7 @@ speedtest_server_ids() {
     安徽\|移动) printf '26404 34035 4377' ;;
     江苏\|电信) printf '5396 36663 26352 5316 5324 5317' ;;
     江苏\|联通) printf '13704 5446' ;;
-    江苏\|移动) printf '16204 27249 21590 21530 21722 21845 26850' ;;
+    江苏\|移动) printf '16204 40131 32291 34559 17320 27249 21590 21530 21722 21845 26850' ;;
     *) return 1 ;;
   esac
 }

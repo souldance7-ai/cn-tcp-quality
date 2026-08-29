@@ -3,6 +3,9 @@ mode="${1:-}"
 host="${2:-}"
 case "$host" in
   ct.example|cu.example|cm.example) ;;
+  speedtest.jsqiuying.com)
+    [ "${MOCK_SPEEDTEST_NET_ONLY:-0}" = "1" ] || exit 2
+    ;;
   speed.cloudflare.com) ;;
   speedtest1.ah163.com|speedtest2.ah.chinamobile.com|4gtest.ahydnet.com)
     [ "${MOCK_HEFEI_STATIC:-0}" = "1" ] || exit 2

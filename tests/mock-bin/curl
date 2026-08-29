@@ -96,13 +96,24 @@ cn-bj-cm,1,0,1,1,cm.example:8080,CN,北京,北京,1,移动,116.4074,39.9042,1,1,
   exit 0
 fi
 
+if [ "${MOCK_SPEEDTEST_NET_ONLY:-0}" = "1" ] && [[ "$url" == *'/speedtest.net-CN-ID/main/CN.csv'* ]]; then
+  payload='id,country_code,country,city,ip,host,port,supplier
+16204,CN,China,Suzhou,36.156.46.51,speedtest.jsqiuying.com,8080,JSQY - Suzhou'
+  if [ -n "$output" ] && [ "$output" != "/dev/null" ]; then
+    printf '%s\n' "$payload" > "$output"
+  else
+    printf '%s\n' "$payload"
+  fi
+  exit 0
+fi
+
 if [ "${MOCK_UPLOAD_NO_RESPONSE:-0}" = "1" ] && [ "$is_upload" -eq 1 ] &&
    { [[ "$url" == *'/upload.php'* ]] || [[ "$url" == *'/upload'* ]]; }; then
   printf '000|131202800|29537500|0.035|8.000|1'
   exit 28
 fi
 
-if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ] || [ "${MOCK_HEFEI_STATIC:-0}" = "1" ] || [ "${MOCK_OOKLA_ALIAS:-0}" = "1" ]; } &&
+if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_NET_ONLY:-0}" = "1" ] || [ "${MOCK_HEFEI_STATIC:-0}" = "1" ] || [ "${MOCK_OOKLA_ALIAS:-0}" = "1" ]; } &&
    { [[ "$url" == *'/download?'* ]] || [[ "$url" == *'/random4000x4000.jpg?'* ]]; }; then
   if [ "${MOCK_SPEEDTEST_CN_STRICT:-0}" = "1" ]; then
     [ "$has_follow" -eq 1 ] || exit 22
@@ -112,7 +123,7 @@ if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1
   exit 0
 fi
 
-if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ] || [ "${MOCK_HEFEI_STATIC:-0}" = "1" ] || [ "${MOCK_OOKLA_ALIAS:-0}" = "1" ]; } &&
+if { [ "${MOCK_DIRECT_HTTP:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_CN_ONLY:-0}" = "1" ] || [ "${MOCK_SPEEDTEST_NET_ONLY:-0}" = "1" ] || [ "${MOCK_HEFEI_STATIC:-0}" = "1" ] || [ "${MOCK_OOKLA_ALIAS:-0}" = "1" ]; } &&
    [ "$is_upload" -eq 1 ] && { [[ "$url" == *'/upload.php'* ]] || [[ "$url" == *'/upload'* ]]; }; then
   if [ "${MOCK_SPEEDTEST_CN_STRICT:-0}" = "1" ]; then
     [ "$has_follow" -eq 1 ] || exit 22

@@ -13,6 +13,7 @@
 - 单线程吞吐测试北京、上海、广东、安徽、江苏三网 IPv4 共 15 组，并另测 1 个自动路由的 IPv6 最近边缘端点
 - 北京／上海／广东 IPv4 优先使用真实 TOS 端点；五省均会从 Ookla 当前目录与每日更新的 Speedtest.cn 国内目录选择同省、同运营商候选
 - 安徽动态发现会分别查询合肥、芜湖、蚌埠、阜阳、安庆、淮南；江苏查询南京、苏州、徐州、南通、无锡、连云港，并以省份／城市特征二次过滤，禁止把邻省节点冒充本省
+- 带宽候选同时读取 Ookla JS API、每日更新的 speedtest.net-CN-ID 与 Speedtest.cn 三份目录；每份目录的获取状态及同省同运营商匹配数量写入 `endpoint-audit.csv`
 - 吞吐测试不使用 `--limit-rate`，也不启用 Speedtest `--saving-mode`；单线程不设置 Mbps 上限。IPv6 最近端点依照服务规格使用单次 250 MB 下载／50 MB 上传 payload
 - 失败原因区分无 A／AAAA、连接超时、路径失效与服务拒绝；终端状态栏采用紧凑显示避免窄窗口换行，完整诊断仍保存在 `endpoint-audit.csv`
 - IPv6 不调用 Speedtest 测速核心，也不套用省份／运营商标签：验证原生 AAAA 后，以 `curl -6` 连接 Cloudflare 自动路由的最近边缘；下载先以 100 KB 预热，并携带同源 Referer，再执行官方 `__down?bytes=`／`__up?bytes=` 请求
