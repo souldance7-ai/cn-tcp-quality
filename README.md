@@ -1,17 +1,17 @@
 # CN TCP Quality
 
-面向中国大陆线路的五省三网双栈 TCP 质量检测脚本。
+面向中国大陆线路的十地区三网双栈 TCP 质量检测脚本。
 
 ## 覆盖范围
 
-- 北京、上海、广东、安徽、江苏
+- 北京、上海、广东、安徽、江苏、武汉、浙江、山东、福建、广西
 - 中国电信、中国联通、中国移动
-- IPv4 与 IPv6，共 30 个 TCP 探测组合
+- IPv4 与 IPv6，共 60 个 TCP 探测组合
 - 丢包率、平均延迟、相邻样本抖动、P95、最低／最高延迟
 - 标准模式每节点 30 个独立样本；检测到部分丢包时自动补测至 60 个样本，丢包率精度由 3.33% 提升至 1.67%
 - 本机无 IPv6 默认路由时自动跳过 IPv6，不使用 IPv4 结果代替
-- 单线程吞吐测试北京、上海、广东、安徽、江苏三网 IPv4 共 15 组，并另测 1 个自动路由的 IPv6 最近边缘端点
-- 北京／上海／广东 IPv4 优先使用真实 TOS 端点；五省均会从 Ookla 当前目录与每日更新的 Speedtest.cn 国内目录选择同省、同运营商候选
+- 单线程吞吐会尝试十地区三网 IPv4 共 30 组，并另测 1 个自动路由的 IPv6 最近边缘端点；主表只保留取得真实下载数据的项目
+- 北京／上海／广东 IPv4 优先使用真实 TOS 端点；十地区均会从 Ookla 当前目录与每日更新的 Speedtest.cn 国内目录选择同地区、同运营商候选
 - 安徽动态发现会分别查询合肥、芜湖、蚌埠、阜阳、安庆、淮南；江苏查询南京、苏州、徐州、南通、无锡、连云港，并以省份／城市特征二次过滤，禁止把邻省节点冒充本省
 - 带宽候选同时读取 Ookla JS API、每日更新的 speedtest.net-CN-ID 与 Speedtest.cn 三份目录；每份目录的获取状态及同省同运营商匹配数量写入 `endpoint-audit.csv`
 - 吞吐测试不使用 `--limit-rate`，也不启用 Speedtest `--saving-mode`；单线程不设置 Mbps 上限。IPv6 最近端点依照服务规格使用单次 250 MB 下载／50 MB 上传 payload
@@ -28,7 +28,7 @@
 - 运行后先显示内建金色 `CN TCP` 开场画面，再进入节点获取和测试，不依赖额外字体工具
 - 每个 TCP 样本独立随机来源端口与 sequence；IPv6 普通发包失败时自动尝试网卡／来源地址／下一跳 MAC 二层回退
 
-测速脚本为五省 15 个三网 IPv4 组合逐项测试，并额外执行 1 组 IPv6 最近边缘测速。Zstatic 地址只承担 TCP SYN 品质探测，绝不被当作下载源；带宽只匹配对应省份和运营商的 Speedtest 候选。IPv6 全程强制解析原生 AAAA、绑定本机 IPv6 来源地址并使用 `curl -6`，不会用 IPv4 或 IPv4-mapped 地址替代。若端点离线、没有对应地址族或只开放单向传输，会在该行明确显示原因，不生成假 Mbps；显示值仅 `0.1 Mbps` 时不会标成 `OK`。
+测速脚本为十地区 30 个三网 IPv4 组合逐项寻找可用下载，并额外执行 1 组 IPv6 最近边缘测速。Zstatic 地址只承担 TCP SYN 品质探测，绝不被当作下载源；带宽只匹配对应地区和运营商的 Speedtest 候选。IPv6 全程强制解析原生 AAAA、绑定本机 IPv6 来源地址并使用 `curl -6`，不会用 IPv4 或 IPv4-mapped 地址替代。端点离线、没有对应地址族或下载低于有效门槛时不会写入主表，只会把完整原因保存在 `endpoint-audit.csv`；仅下载成功、上传不可用时仍保留真实下载值并明确标注。
 
 ## 一键运行
 
@@ -59,12 +59,12 @@ bash <(curl -fsSL --retry 3 "https://raw.githubusercontent.com/souldance7-ai/cn-
 ## 参数
 
 ```text
---speed             追加五省 IPv4 三网＋IPv6 最近端点单线程测速
+--speed             尝试十地区 IPv4 三网＋IPv6 最近端点单线程测速
 --speed-only        仅执行单线程测速，跳过 TCP 品质表
 --quick             每节点 10 包，缩短测速时间但不限制 Mbps
 -c, --count N       每个节点发包数，默认 30
 -p, --parallel N    并行节点数，默认 6
---province CODE     仅测指定省份，可重复：bj/sh/gd/ah/js
+--province CODE     仅测指定地区，可重复：bj/sh/gd/ah/js/wh/zj/sd/fj/gx
 -4, --ipv4          仅测 IPv4
 -6, --ipv6          仅测 IPv6
 --output DIR        指定结果目录
@@ -77,7 +77,7 @@ bash <(curl -fsSL --retry 3 "https://raw.githubusercontent.com/souldance7-ai/cn-
 # 只测安徽、江苏双栈
 bash cn-tcp-quality.sh --province ah --province js
 
-# 只测五省 IPv6
+# 只测十地区 IPv6
 bash cn-tcp-quality.sh -6
 
 # 完整测速并增加样本数
@@ -86,9 +86,9 @@ bash cn-tcp-quality.sh --speed --count 30
 
 ## 输出文件
 
-- `tcp-quality.csv`：五省三网双栈 TCP 指标
+- `tcp-quality.csv`：十地区三网双栈 TCP 指标
 - `probe-endpoints.csv`：Zstatic 探针的域名、实时解析、内置备援及实际选用 IP
-- `single-thread-speed.csv`：五省 IPv4 三网与 IPv6 最近端点单线程吞吐指标，使用 `--speed` 时生成
+- `single-thread-speed.csv`：十地区 IPv4 三网与 IPv6 最近端点中取得真实下载数据的单线程吞吐指标，使用 `--speed` 时生成
 - `endpoint-audit.csv`：所有直连候选的目录来源、端点 ID、解析地址和失败阶段，使用 `--speed` 时生成
 - `README.txt`：本次测试摘要
 
@@ -99,8 +99,8 @@ CSV 使用 UTF-8 BOM，可直接用 Excel 打开。
 交互式终端会持续刷新单行进度，不会长时间只显示“请稍候”：
 
 ```text
-TCP 探测     [###############---------------]  50%  15/30  当前：IPv4 江苏移动
-单线程测速   [##############################] 100%  16/16  当前：全部完成
+TCP 探测     [###############---------------]  50%  30/60  当前：IPv4 江苏移动
+单线程测速   [##############################] 100%  31/31  当前：全部完成
 ```
 
 彩色终端使用红→黄→绿动态渐层；`--no-color` 时改用纯文本进度条。重定向到日志文件时默认不输出动态进度，可设置 `CN_TCP_PROGRESS=always` 强制保留。
@@ -121,11 +121,11 @@ TCP 探测     [###############---------------]  50%  15/30  当前：IPv4 江�
 
 ## 流量提醒
 
-默认不执行吞吐测速。`--speed` 对五省三网 IPv4 共 15 个组合逐项执行，并另测 1 个自动路由的 IPv6 最近边缘端点。脚本不设置 Mbps 上限，也不使用 Speedtest 省流模式；IPv4 标准模式每个直连方向最多 1GiB／8 秒、快速模式最多 256MiB／3 秒，IPv6 最近端点依服务规格单次最多下载 250 MB、上传 50 MB。端点拒绝或超时时会提前结束并尝试下一个候选，请确认 VPS 流量配额后使用。
+默认不执行吞吐测速。`--speed` 对十地区三网 IPv4 共 30 个组合逐项寻找可用端点，并另测 1 个自动路由的 IPv6 最近边缘端点；主表只显示有真实下载数据的项目，失败候选仍完整写入审计。脚本不设置 Mbps 上限，也不使用 Speedtest 省流模式；IPv4 标准模式每个直连方向最多 1GiB／8 秒、快速模式最多 256MiB／3 秒，IPv6 最近端点依服务规格单次最多下载 250 MB、上传 50 MB。端点拒绝或超时时会提前结束并尝试下一个候选，请确认 VPS 流量配额后使用。
 
 ## 节点来源与第三方说明
 
-脚本优先读取 TcpQuality 对外提供的动态 TCP 探测节点接口，并带有五省三网回退快照；Zstatic 域名会在每次运行时重解析，固定 IP 只作 DNS 失效时的备援。IPv4 单线程测速读取 Ookla 当前服务器目录及 spiritLHLS/speedtest.cn-CN-ID 国内公开目录；IPv6 最近端点使用 Cloudflare Speed Test 官方的 `__down`／`__up` 边缘接口。IPv4 在直连失败时才回退 showwin/speedtest-go（MIT）及 sivel/speedtest-cli（Apache-2.0）。第三方测速核心下载后会校验官方 SHA-256。节点域名、IP、Zstatic CDN、火山引擎 TOS 与第三方测速服务均属于各自权利人，不包含在本项目 MIT 授权范围内，也不代表相关服务方为本项目背书。
+脚本优先读取 TcpQuality 对外提供的动态 TCP 探测节点接口，并以十地区三网内置清单补齐缺项；Zstatic 域名会在每次运行时重解析，已有固定 IP 只作 DNS 失效时的备援。IPv4 单线程测速读取 Ookla 当前服务器目录及 spiritLHLS 的 speedtest.net／Speedtest.cn 国内公开目录；IPv6 最近端点使用 Cloudflare Speed Test 官方的 `__down`／`__up` 边缘接口。IPv4 在直连失败时才回退 showwin/speedtest-go（MIT）及 sivel/speedtest-cli（Apache-2.0）。第三方测速核心下载后会校验官方 SHA-256。节点域名、IP、Zstatic CDN、火山引擎 TOS 与第三方测速服务均属于各自权利人，不包含在本项目 MIT 授权范围内，也不代表相关服务方为本项目背书。
 
 本项目不上传测试报告、不采集公网 IP、不参与排行榜。
 

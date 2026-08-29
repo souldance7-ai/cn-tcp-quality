@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
 # CN TCP Quality V1
-# Five-province, three-carrier, dual-stack TCP quality probe.
+# Ten-region, three-carrier, dual-stack TCP quality probe.
 # SPDX-License-Identifier: MIT
 
 set -uo pipefail
 
-VERSION="1.11.2"
+VERSION="1.12.0"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 SPEEDTEST_NET_CATALOG_URL="${CN_TCP_SPEEDTEST_NET_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.net-CN-ID/main/CN.csv}"
@@ -35,6 +35,7 @@ QUICK=0
 SELF_TEST=0
 OUTPUT_DIR=""
 SELECTED_PROVINCES=""
+PROVINCE_ORDER=(北京 上海 广东 安徽 江苏 武汉 浙江 山东 福建 广西)
 SCRIPT_NAME="CN TCP Quality"
 HTTP_USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 CN-TCP-Quality/${VERSION}"
 
@@ -59,12 +60,12 @@ CN TCP Quality V1
   bash cn-tcp-quality.sh [选项]
 
 选项：
-  --speed             追加五省 IPv4 三网＋IPv6 最近端点单线程测速（流量较大）
+  --speed             追加十地区 IPv4 三网＋IPv6 最近端点单线程测速（流量较大）
   --speed-only        仅执行单线程测速，跳过 TCP 品质表
   --quick             快速模式：每节点 10 包，测速时间缩短（不限制 Mbps）
   -c, --count N       每个 TCP 节点发包数，默认 30，范围 3-100
   -p, --parallel N    并行节点数，默认 6，范围 1-15
-  --province CODE     仅测指定省份，可重复：bj/sh/gd/ah/js
+  --province CODE     仅测指定地区，可重复：bj/sh/gd/ah/js/wh/zj/sd/fj/gx
   -4, --ipv4          仅测 IPv4
   -6, --ipv6          仅测 IPv6
   --output DIR        指定结果目录
@@ -75,8 +76,9 @@ CN TCP Quality V1
   bash cn-tcp-quality.sh --speed
 
 说明：
-  双栈 TCP 主表覆盖北京、上海、广东、安徽、江苏三网。
-  单线程吞吐测试五省 IPv4 三网 15 组，并另测 1 个 IPv6 最近端点。
+  双栈 TCP 主表覆盖北京、上海、广东、安徽、江苏、武汉、浙江、山东、福建、广西三网。
+  单线程吞吐逐项尝试十地区 IPv4 三网，并另测 1 个 IPv6 最近端点。
+  主表与 single-thread-speed.csv 只保留取得真实下载数据的项目；失败详情写入端点审计。
   Zstatic 仅用于 TCP 品质探测；吞吐只使用对应省份、运营商的测速端点。
   IPv6 强制原生 AAAA 与 curl -6，不套用省份或运营商标签。
   下载不设置速率上限；仅以测试时长和最大流量保护 VPS 配额。
@@ -92,6 +94,11 @@ province_name() {
     gd|广东) printf '广东' ;;
     ah|安徽) printf '安徽' ;;
     js|江苏) printf '江苏' ;;
+    wh|hb|武汉|湖北) printf '武汉' ;;
+    zj|浙江) printf '浙江' ;;
+    sd|山东) printf '山东' ;;
+    fj|福建) printf '福建' ;;
+    gx|广西) printf '广西' ;;
     *) return 1 ;;
   esac
 }
@@ -127,7 +134,7 @@ parse_args() {
         PARALLEL="$2"; shift 2 ;;
       --province)
         [ "${2:-}" != "" ] && add_province "$2" || {
-          echo "省份仅支持 bj/sh/gd/ah/js。" >&2; exit 2;
+          echo "地区仅支持 bj/sh/gd/ah/js/wh/zj/sd/fj/gx。" >&2; exit 2;
         }
         shift 2 ;;
       --output)
@@ -148,7 +155,7 @@ parse_args() {
     GOLD_WHITE=""; GOLD_LIGHT=""; GOLD_BRIGHT=""; GOLD_AMBER=""
     GOLD_WARM=""; GOLD_DARK=""; GOLD_SHADOW=""; TEXT_GRAY=""
   }
-  [ -n "$SELECTED_PROVINCES" ] || SELECTED_PROVINCES="北京|上海|广东|安徽|江苏"
+  [ -n "$SELECTED_PROVINCES" ] || SELECTED_PROVINCES="北京|上海|广东|安徽|江苏|武汉|浙江|山东|福建|广西"
 }
 
 banner_enabled() {
@@ -175,7 +182,7 @@ show_banner() {
   printf '%b     ░▒▓██████████████████████████████████████▓▒░%b\n' "$GOLD_SHADOW" "$NC"
   printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' \
     "$GOLD_BRIGHT" "$NC"
-  printf '%b♣  [ 五省三网双栈 TCP 品质 · 五省 IPv4／IPv6 近端测速 ]%b\n' \
+  printf '%b♣  [ 十地区三网双栈 TCP 品质 · 有效 IPv4／IPv6 近端测速 ]%b\n' \
     "$GOLD_BRIGHT$BOLD" "$NC"
   printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' \
     "$GOLD_BRIGHT" "$NC"
@@ -269,6 +276,36 @@ cdn	4	江苏	移动	js-cm-v4.ip.zstaticcdn.com	36.155.201.187	80	js-cm-v4.ip.zst
 cdn	6	江苏	电信	js-ct-v6.ip.zstaticcdn.com	240e:979:9509:180::b00:81	80	js-ct-v6.ip.zstaticcdn.com
 cdn	6	江苏	联通	js-cu-v6.ip.zstaticcdn.com	2408:873c:6010:5:8000:0:b00:32	80	js-cu-v6.ip.zstaticcdn.com
 cdn	6	江苏	移动	js-cm-v6.ip.zstaticcdn.com	2409:8c20:6ed1:10c:8000:0:b00:138	80	js-cm-v6.ip.zstaticcdn.com
+cdn	4	武汉	电信	hb-ct-v4.ip.zstaticcdn.com	-	80	hb-ct-v4.ip.zstaticcdn.com
+cdn	4	武汉	联通	hb-cu-v4.ip.zstaticcdn.com	-	80	hb-cu-v4.ip.zstaticcdn.com
+cdn	4	武汉	移动	hb-cm-v4.ip.zstaticcdn.com	-	80	hb-cm-v4.ip.zstaticcdn.com
+cdn	6	武汉	电信	hb-ct-v6.ip.zstaticcdn.com	-	80	hb-ct-v6.ip.zstaticcdn.com
+cdn	6	武汉	联通	hb-cu-v6.ip.zstaticcdn.com	-	80	hb-cu-v6.ip.zstaticcdn.com
+cdn	6	武汉	移动	hb-cm-v6.ip.zstaticcdn.com	-	80	hb-cm-v6.ip.zstaticcdn.com
+cdn	4	浙江	电信	zj-ct-v4.ip.zstaticcdn.com	-	80	zj-ct-v4.ip.zstaticcdn.com
+cdn	4	浙江	联通	zj-cu-v4.ip.zstaticcdn.com	-	80	zj-cu-v4.ip.zstaticcdn.com
+cdn	4	浙江	移动	zj-cm-v4.ip.zstaticcdn.com	-	80	zj-cm-v4.ip.zstaticcdn.com
+cdn	6	浙江	电信	zj-ct-v6.ip.zstaticcdn.com	-	80	zj-ct-v6.ip.zstaticcdn.com
+cdn	6	浙江	联通	zj-cu-v6.ip.zstaticcdn.com	-	80	zj-cu-v6.ip.zstaticcdn.com
+cdn	6	浙江	移动	zj-cm-v6.ip.zstaticcdn.com	-	80	zj-cm-v6.ip.zstaticcdn.com
+cdn	4	山东	电信	sd-ct-v4.ip.zstaticcdn.com	-	80	sd-ct-v4.ip.zstaticcdn.com
+cdn	4	山东	联通	sd-cu-v4.ip.zstaticcdn.com	-	80	sd-cu-v4.ip.zstaticcdn.com
+cdn	4	山东	移动	sd-cm-v4.ip.zstaticcdn.com	-	80	sd-cm-v4.ip.zstaticcdn.com
+cdn	6	山东	电信	sd-ct-v6.ip.zstaticcdn.com	-	80	sd-ct-v6.ip.zstaticcdn.com
+cdn	6	山东	联通	sd-cu-v6.ip.zstaticcdn.com	-	80	sd-cu-v6.ip.zstaticcdn.com
+cdn	6	山东	移动	sd-cm-v6.ip.zstaticcdn.com	-	80	sd-cm-v6.ip.zstaticcdn.com
+cdn	4	福建	电信	fj-ct-v4.ip.zstaticcdn.com	-	80	fj-ct-v4.ip.zstaticcdn.com
+cdn	4	福建	联通	fj-cu-v4.ip.zstaticcdn.com	-	80	fj-cu-v4.ip.zstaticcdn.com
+cdn	4	福建	移动	fj-cm-v4.ip.zstaticcdn.com	-	80	fj-cm-v4.ip.zstaticcdn.com
+cdn	6	福建	电信	fj-ct-v6.ip.zstaticcdn.com	-	80	fj-ct-v6.ip.zstaticcdn.com
+cdn	6	福建	联通	fj-cu-v6.ip.zstaticcdn.com	-	80	fj-cu-v6.ip.zstaticcdn.com
+cdn	6	福建	移动	fj-cm-v6.ip.zstaticcdn.com	-	80	fj-cm-v6.ip.zstaticcdn.com
+cdn	4	广西	电信	gx-ct-v4.ip.zstaticcdn.com	-	80	gx-ct-v4.ip.zstaticcdn.com
+cdn	4	广西	联通	gx-cu-v4.ip.zstaticcdn.com	-	80	gx-cu-v4.ip.zstaticcdn.com
+cdn	4	广西	移动	gx-cm-v4.ip.zstaticcdn.com	-	80	gx-cm-v4.ip.zstaticcdn.com
+cdn	6	广西	电信	gx-ct-v6.ip.zstaticcdn.com	-	80	gx-ct-v6.ip.zstaticcdn.com
+cdn	6	广西	联通	gx-cu-v6.ip.zstaticcdn.com	-	80	gx-cu-v6.ip.zstaticcdn.com
+cdn	6	广西	移动	gx-cm-v6.ip.zstaticcdn.com	-	80	gx-cm-v6.ip.zstaticcdn.com
 tos	4	北京	电信	tos-bj-ct-v4.ibsgss.uk	42.81.80.87	443	tos-cn-beijing.volces.com
 tos	4	北京	联通	tos-bj-cu-v4.ibsgss.uk	119.250.10.102	443	tos-cn-beijing.volces.com
 tos	4	北京	移动	tos-bj-cm-v4.ibsgss.uk	120.255.0.180	443	tos-cn-beijing.volces.com
@@ -296,7 +333,10 @@ load_nodes() {
   local remote="$WORK_DIR/nodes.remote.tsv" normalized="$WORK_DIR/nodes.normalized.tsv"
   local tos_remote="$WORK_DIR/nodes.tos.remote.tsv" tos_normalized="$WORK_DIR/nodes.tos.normalized.tsv"
   local builtin="$WORK_DIR/nodes.builtin.tsv" builtin_normalized="$WORK_DIR/nodes.builtin.normalized.tsv"
+  local merged="$WORK_DIR/nodes.merged.tsv"
   NODE_SOURCE="builtin-fallback"
+  write_builtin_nodes "$builtin"
+  normalize_remote_nodes "$builtin" "$builtin_normalized"
   if [ "$SELF_TEST" -eq 0 ] && curl -fsSL --retry 2 --connect-timeout 6 --max-time 25 "$NODE_API" -o "$remote" 2>/dev/null; then
     normalize_remote_nodes "$remote" "$normalized"
     if [ "$(awk -F '\t' '$1=="cdn"{n++} END{print n+0}' "$normalized")" -ge 30 ]; then
@@ -307,16 +347,18 @@ load_nodes() {
         awk -F '\t' '$1=="tos"' "$tos_normalized" >> "$NODE_FILE"
       fi
       if [ "$(awk -F '\t' '$1=="tos"&&$2=="4"{n++}END{print n+0}' "$NODE_FILE")" -lt 9 ]; then
-        write_builtin_nodes "$builtin"
-        normalize_remote_nodes "$builtin" "$builtin_normalized"
         awk -F '\t' '$1=="tos"' "$builtin_normalized" >> "$NODE_FILE"
       fi
-      NODE_SOURCE="dynamic-api"
+      # 远端接口可能尚未同步新地区，以 type/family/province/operator 为键
+      # 补齐内置节点；远端记录优先，避免旧接口把新增地区从计划中删掉。
+      awk -F '\t' 'BEGIN{OFS="\t"}!seen[$1 FS $2 FS $3 FS $4]++' \
+        "$NODE_FILE" "$builtin_normalized" > "$merged"
+      mv "$merged" "$NODE_FILE"
+      NODE_SOURCE="dynamic-api+builtin-supplement"
       return 0
     fi
   fi
-  write_builtin_nodes "$remote"
-  normalize_remote_nodes "$remote" "$NODE_FILE"
+  cp "$builtin_normalized" "$NODE_FILE"
 }
 
 refresh_probe_addresses() {
@@ -359,7 +401,7 @@ prepare_probe_plan() {
   : > "$PLAN_FILE"
   for family in 4 6; do
     [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "$family" ] || continue
-    for prov in 北京 上海 广东 安徽 江苏; do
+    for prov in "${PROVINCE_ORDER[@]}"; do
       selected_province "$prov" || continue
       for isp in 电信 联通 移动; do
         line=$(awk -F '\t' -v f="$family" -v p="$prov" -v i="$isp" '$1=="cdn" && $2==f && $3==p && $4==i {print; exit}' "$NODE_FILE")
@@ -655,7 +697,7 @@ show_tcp_results() {
   local file family prov isp loss avg jitter p95 min max received status host ipaddr sent lc ac line
   TCP_CSV="$OUTPUT_DIR/tcp-quality.csv"
   printf '\xEF\xBB\xBF协议,省份,运营商,丢包率(%%),平均延迟(ms),抖动(ms),P95(ms),最低延迟(ms),最高延迟(ms),接收,发送,状态,域名,IP\n' > "$TCP_CSV"
-  echo -e "${BOLD}${CYAN}五省三网 TCP 品质（双栈）${NC}"
+  echo -e "${BOLD}${CYAN}十地区三网 TCP 品质（双栈）${NC}"
   echo
   printf '  '; pad_left 6 '协议'; printf '  '; pad_left 12 '地区线路'; printf '  '; pad_left 10 '丢包率'; printf '  '; pad_left 11 '平均延迟'; printf '  '; pad_left 9 '抖动'; printf '  '; pad_left 9 'P95'; printf '  '; pad_left 17 '最低／最高'; printf '  '; pad_left 8 '状态'; printf '\n'
   for file in "$RESULT_DIR"/*.tsv; do
@@ -765,6 +807,11 @@ speedtest_catalog_file() {
     广东) printf '%s/catalog-gd.json' "$WORK_DIR" ;;
     安徽) printf '%s/catalog-ah.json' "$WORK_DIR" ;;
     江苏) printf '%s/catalog-js.json' "$WORK_DIR" ;;
+    武汉) printf '%s/catalog-wh.json' "$WORK_DIR" ;;
+    浙江) printf '%s/catalog-zj.json' "$WORK_DIR" ;;
+    山东) printf '%s/catalog-sd.json' "$WORK_DIR" ;;
+    福建) printf '%s/catalog-fj.json' "$WORK_DIR" ;;
+    广西) printf '%s/catalog-gx.json' "$WORK_DIR" ;;
     *) return 1 ;;
   esac
 }
@@ -782,8 +829,8 @@ PY
     printf '%s' "$file"
     return 0
   fi
-  # 安徽、江苏不再只查询省会中心点；轮询省内多座城市可发现未进入
-  # 省会最近 200 个结果的县市节点。结果随后仍会按省份／城市特征过滤，
+  # 轮询地区内多座城市可发现未进入省会附近目录的县市节点；结果随后
+  # 仍会按省份／城市特征过滤，武汉则严格限定湖北省武汉市，
   # 不会把邻省服务器冒充本省测速端点。
   while IFS= read -r location; do
     [ -n "$location" ] || continue
@@ -825,6 +872,19 @@ speedtest_discovery_locations() {
     江苏) printf '%s\n' \
       '32.0603,118.7969' '31.2989,120.5853' '34.2044,117.2858' \
       '32.0162,120.8646' '31.4912,120.3119' '34.5967,119.2216' ;;
+    武汉) printf '%s\n' '30.5928,114.3055' ;;
+    浙江) printf '%s\n' \
+      '30.2741,120.1551' '29.8683,121.5440' '28.0006,120.6721' \
+      '30.7461,120.7555' '29.9958,120.5861' '29.0792,119.6474' ;;
+    山东) printf '%s\n' \
+      '36.6512,117.1201' '36.0671,120.3826' '37.4638,121.4479' \
+      '36.7069,119.1618' '35.1047,118.3564' '36.8149,118.0550' ;;
+    福建) printf '%s\n' \
+      '26.0745,119.2965' '24.4798,118.0894' '24.8741,118.6757' \
+      '24.5130,117.6471' '25.4541,119.0077' ;;
+    广西) printf '%s\n' \
+      '22.8170,108.3665' '24.3264,109.4281' '25.2736,110.2900' \
+      '21.4733,109.1199' '21.9811,108.6541' ;;
     *) speedtest_location "$1"; printf '\n' ;;
   esac
 }
@@ -840,7 +900,9 @@ path, province, isp = sys.argv[1:]
 coords = {
     "北京": (39.9042, 116.4074), "上海": (31.2304, 121.4737),
     "广东": (23.1291, 113.2644), "安徽": (31.8206, 117.2272),
-    "江苏": (32.0603, 118.7969),
+    "江苏": (32.0603, 118.7969), "武汉": (30.5928, 114.3055),
+    "浙江": (30.2741, 120.1551), "山东": (36.6512, 117.1201),
+    "福建": (26.0745, 119.2965), "广西": (22.8170, 108.3665),
 }
 aliases = {
     "电信": ("china telecom", "telecom", "chinanet", "ctgnet", "中国电信", "电信", "189.cn", "ah163"),
@@ -853,6 +915,11 @@ province_aliases = {
     "广东": ("guangdong", "guangzhou", "shenzhen", "foshan", "dongguan", "zhongshan", "zhuhai", "huizhou", "广东", "广州", "深圳"),
     "安徽": ("anhui", "hefei", "wuhu", "bengbu", "fuyang", "anqing", "huainan", "chuzhou", "huangshan", "ah163", ".ah.", "安徽", "合肥", "芜湖", "蚌埠", "阜阳", "安庆", "淮南", "滁州"),
     "江苏": ("jiangsu", "nanjing", "suzhou", "wuxi", "xuzhou", "nantong", "changzhou", "zhenjiang", "yangzhou", "lianyungang", "jsinfo", "jsqiuying", "江苏", "南京", "苏州", "无锡", "徐州", "南通"),
+    "武汉": ("hubei", "wuhan", "wuhan.net.cn", ".hb.", "湖北", "武汉"),
+    "浙江": ("zhejiang", "hangzhou", "ningbo", "wenzhou", "jiaxing", "shaoxing", "jinhua", "zjtelecom", ".zj.", "浙江", "杭州", "宁波", "温州"),
+    "山东": ("shandong", "jinan", "qingdao", "yantai", "weifang", "linyi", ".sd.", "山东", "济南", "青岛", "烟台", "临沂"),
+    "福建": ("fujian", "fuzhou", "xiamen", "quanzhou", "zhangzhou", ".fj.", "福建", "福州", "厦门", "泉州"),
+    "广西": ("guangxi", "nanning", "liuzhou", "guilin", ".gx.", "广西", "南宁", "柳州", "桂林"),
 }
 
 def distance(a, b):
@@ -919,6 +986,7 @@ import csv, sys
 from urllib.parse import urlsplit
 
 path, province, isp = sys.argv[1:]
+catalog_province = "湖北" if province == "武汉" else province
 seen = set()
 found = []
 try:
@@ -927,7 +995,9 @@ except OSError:
     raise SystemExit(1)
 with stream:
     for row in csv.DictReader(stream):
-        if row.get("province", "").strip() != province:
+        if row.get("province", "").strip() != catalog_province:
+            continue
+        if province == "武汉" and row.get("city", "").strip() != "武汉":
             continue
         if row.get("operator", "").strip() != isp:
             continue
@@ -986,11 +1056,16 @@ province_cities = {
     "广东": ("guangzhou", "shenzhen", "foshan", "dongguan", "zhongshan", "zhuhai", "huizhou"),
     "安徽": ("hefei", "wuhu", "bengbu", "fuyang", "anqing", "huainan", "chuzhou", "huangshan"),
     "江苏": ("nanjing", "suzhou", "wuxi", "xuzhou", "nantong", "changzhou", "zhenjiang", "yangzhou", "lianyungang", "kunshan"),
+    "武汉": ("wuhan",),
+    "浙江": ("hangzhou", "ningbo", "wenzhou", "jiaxing", "shaoxing", "jinhua", "taizhou", "huzhou", "quzhou", "lishui", "zhoushan"),
+    "山东": ("jinan", "qingdao", "yantai", "weifang", "linyi", "jining", "zibo", "weihai"),
+    "福建": ("fuzhou", "xiamen", "quanzhou", "zhangzhou", "putian"),
+    "广西": ("nanning", "liuzhou", "guilin", "wuzhou", "beihai", "qinzhou"),
 }
 operator_aliases = {
-    "电信": ("china telecom", "telecom", "chinanet", "ctgnet"),
-    "联通": ("china unicom", "unicom", "china169"),
-    "移动": ("china mobile", "cmcc", "jsqy"),
+    "电信": ("china telecom", "telecom", "chinanet", "ctgnet", "电信"),
+    "联通": ("china unicom", "unicom", "china169", "联通"),
+    "移动": ("china mobile", "cmcc", "jsqy", "移动"),
 }
 # 部分当前目录使用企业简称，ID 的运营商归属由同日 Speedtest.cn 目录交叉核对。
 known_operator = {"16204": "移动"}
@@ -1436,6 +1511,19 @@ speedtest_server_ids() {
     江苏\|电信) printf '5396 36663 26352 5316 5324 5317' ;;
     江苏\|联通) printf '13704 5446' ;;
     江苏\|移动) printf '16204 40131 32291 34559 17320 27249 21590 21530 21722 21845 26850' ;;
+    武汉\|电信) printf '29353 23844 20038 23665 24011' ;;
+    武汉\|联通) printf '5485' ;;
+    武汉\|移动) printf '16395 26357 26547' ;;
+    浙江\|电信) printf '59387 7509' ;;
+    浙江\|联通) printf '33995 6245 5300' ;;
+    浙江\|移动) printf '4647 6715 12278' ;;
+    山东\|联通) printf '5039 26180 12538 5710' ;;
+    山东\|移动) printf '27151 25881 27100 17388 16314 17480 17432' ;;
+    福建\|联通) printf '4884 5506' ;;
+    福建\|移动) printf '16171' ;;
+    广西\|电信) printf '27810 27794 10192 10305 22724' ;;
+    广西\|联通) printf '5674' ;;
+    广西\|移动) printf '15863' ;;
     *) return 1 ;;
   esac
 }
@@ -1447,6 +1535,11 @@ speedtest_location() {
     广东) printf '23.1291,113.2644' ;;
     安徽) printf '31.8206,117.2272' ;;
     江苏) printf '32.0603,118.7969' ;;
+    武汉) printf '30.5928,114.3055' ;;
+    浙江) printf '30.2741,120.1551' ;;
+    山东) printf '36.6512,117.1201' ;;
+    福建) printf '26.0745,119.2965' ;;
+    广西) printf '22.8170,108.3665' ;;
     *) return 1 ;;
   esac
 }
@@ -1557,7 +1650,7 @@ execute_speedtest_candidate() {
   shift 3
   local json="$WORK_DIR/speedtest-${family}-${tag}.json"
   local sslog="$WORK_DIR/speedtest-${family}-${tag}.ss"
-  local pid monitor_pid rc=0 dl up latency retrans endpoint_id
+  local pid monitor_pid rc=0 dl up latency retrans endpoint_id metric_status="OK"
   timeout 120 "$@" > "$json" 2>/dev/null & pid=$!
   monitor_speedtest_pid "$pid" "$sslog" & monitor_pid=$!
   wait "$pid" || rc=$?
@@ -1566,29 +1659,37 @@ execute_speedtest_candidate() {
   if [ "$SPEEDTEST_ENGINE" = "cli" ]; then
     dl=$(json_number download "$json"); up=$(json_number upload "$json"); latency=$(json_number ping "$json")
     [[ "$dl" =~ ^[-+0-9.eE]+$ ]] && [[ "$up" =~ ^[-+0-9.eE]+$ ]] || return 1
-    awk -v d="$dl" -v u="$up" 'BEGIN{exit !(d>=150000&&u>=150000)}' || return 3
+    awk -v d="$dl" 'BEGIN{exit !(d>=150000)}' || return 3
     dl=$(awk -v n="$dl" 'BEGIN{printf "%.1f",n/1000000}')
-    up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n/1000000}')
+    if awk -v u="$up" 'BEGIN{exit !(u>=150000)}'; then
+      up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n/1000000}')
+    else
+      up="-"; metric_status="仅下载可用：上传低于0.2Mbps"
+    fi
     if [[ "$latency" =~ ^[-+0-9.eE]+$ ]]; then latency=$(awk -v n="$latency" 'BEGIN{printf "%.0f",n}'); else latency="-"; fi
   else
     dl=$(json_number dl_speed "$json"); up=$(json_number ul_speed "$json"); latency=$(json_number latency "$json")
     [[ "$dl" =~ ^[-+0-9.eE]+$ ]] && [[ "$up" =~ ^[-+0-9.eE]+$ ]] || return 1
     # speedtest-go 输出字节／秒；18750 B/s 为 0.15 Mbps，四舍五入后至少
     # 显示 0.2 Mbps，避免把画面上的 0.1 Mbps 标成 OK。
-    awk -v d="$dl" -v u="$up" 'BEGIN{exit !(d>=18750&&u>=18750)}' || return 3
+    awk -v d="$dl" 'BEGIN{exit !(d>=18750)}' || return 3
     dl=$(awk -v n="$dl" 'BEGIN{printf "%.1f",n*8/1000000}')
-    up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n*8/1000000}')
+    if awk -v u="$up" 'BEGIN{exit !(u>=18750)}'; then
+      up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n*8/1000000}')
+    else
+      up="-"; metric_status="仅下载可用：上传低于0.2Mbps"
+    fi
     if [[ "$latency" =~ ^[-+0-9.eE]+$ ]]; then latency=$(awk -v n="$latency" 'BEGIN{printf "%.0f",n/1000000}'); else latency="-"; fi
   fi
   endpoint_id=$(json_string id "$json" 2>/dev/null || true)
   [ -n "$endpoint_id" ] || endpoint_id=$(json_number id "$json" 2>/dev/null || true)
-  retrans=$(retrans_percent_from_ss "$sslog")
-  printf '%s|%s|%s|%s|OK|speedtest.net#%s(%s)' \
-    "$retrans" "$up" "$dl" "$latency" "${endpoint_id:-unknown}" "$label"
+  if [ "$up" = "-" ]; then retrans="-"; else retrans=$(retrans_percent_from_ss "$sslog"); fi
+  printf '%s|%s|%s|%s|%s|speedtest.net#%s(%s)' \
+    "$retrans" "$up" "$dl" "$latency" "$metric_status" "${endpoint_id:-unknown}" "$label"
 }
 
 run_speedtest_row() {
-  local family="$1" prov="$2" isp="$3" source ids id location keyword result rc low_speed=0
+  local family="$1" prov="$2" isp="$3" source ids id location keyword result rc low_speed=0 success_note
   local -a args=()
   [ "$family" = "4" ] || {
     printf '%s' '-|-|-|-|IPv6不使用Speedtest核心|speedtest'
@@ -1613,8 +1714,9 @@ run_speedtest_row() {
         --source="$source" --thread=1 --json "${args[@]}")
       rc=$?
       if [ "$rc" -eq 0 ]; then
-        printf 'IPv%s,%s,%s,SpeedtestCore,dynamic,-,-,测速,成功\n' \
-          "$family" "$prov" "$isp" >> "$SPEED_AUDIT_CSV"
+        if [[ "$result" == *'|仅下载可用：'* ]]; then success_note='成功(仅下载)'; else success_note='成功'; fi
+        printf 'IPv%s,%s,%s,SpeedtestCore,dynamic,-,-,测速,%s\n' \
+          "$family" "$prov" "$isp" "$success_note" >> "$SPEED_AUDIT_CSV"
         printf '%s' "$result"; return
       fi
       printf 'IPv%s,%s,%s,SpeedtestCore,dynamic,-,-,测速,失败(rc=%s)\n' \
@@ -1634,8 +1736,9 @@ run_speedtest_row() {
     fi
     rc=$?
     if [ "$rc" -eq 0 ]; then
-      printf 'IPv%s,%s,%s,SpeedtestCore,%s,-,-,测速,成功\n' \
-        "$family" "$prov" "$isp" "$id" >> "$SPEED_AUDIT_CSV"
+      if [[ "$result" == *'|仅下载可用：'* ]]; then success_note='成功(仅下载)'; else success_note='成功'; fi
+      printf 'IPv%s,%s,%s,SpeedtestCore,%s,-,-,测速,%s\n' \
+        "$family" "$prov" "$isp" "$id" "$success_note" >> "$SPEED_AUDIT_CSV"
       printf '%s' "$result"; return
     fi
     printf 'IPv%s,%s,%s,SpeedtestCore,%s,-,-,测速,失败(rc=%s)\n' \
@@ -1689,7 +1792,7 @@ print_speed_result_row() {
 run_speedtests() {
   local family prov isp result retrans up down latency status engine current
   local direct_status direct_engine fallback_status fallback_engine direct_short fallback_short
-  local completed=0 total
+  local completed=0 total displayed=0
   SPEED_CSV="$OUTPUT_DIR/single-thread-speed.csv"
   SPEED_AUDIT_CSV="$OUTPUT_DIR/endpoint-audit.csv"
   SPEED_EXECUTED=1
@@ -1697,7 +1800,7 @@ run_speedtests() {
   printf '\xEF\xBB\xBF协议,省份,运营商,目录来源,端点ID,域名,解析地址,阶段,结果\n' > "$SPEED_AUDIT_CSV"
   total=0
   if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "4" ]; then
-    for prov in 北京 上海 广东 安徽 江苏; do
+    for prov in "${PROVINCE_ORDER[@]}"; do
       selected_province "$prov" || continue
       total=$((total + 3))
     done
@@ -1705,8 +1808,8 @@ run_speedtests() {
   if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "6" ]; then
     total=$((total + 1))
   fi
-  echo -e "${BOLD}${CYAN}五省 IPv4 三网＋IPv6 最近端点单线程测速${NC}"
-  echo -e "${DIM}IPv4 五省三网 15 组；IPv6 强制 curl -6 自动连接最近边缘；单连接、不限制 Mbps。${NC}"
+  echo -e "${BOLD}${CYAN}十地区 IPv4 三网＋IPv6 最近端点单线程测速${NC}"
+  echo -e "${DIM}逐项尝试同地区测速，仅显示取得真实下载数据的结果；单连接、不限制 Mbps。${NC}"
   if [ "$total" -eq 0 ]; then
     echo -e "${YELLOW}所选范围没有可执行的吞吐项目。${NC}"
     echo
@@ -1717,7 +1820,7 @@ run_speedtests() {
   printf '  '; pad_left 5 '协议'; printf '  '; pad_left 10 '地区线路'; printf '  '; pad_left 9 '回程重传'; printf '  '; pad_left 10 '回程速度'; printf '  '; pad_left 10 '去程速度'; printf '  '; pad_left 11 '节点延迟'; printf '  '; pad_left 18 '状态'; printf '\n'
   if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "4" ]; then
     family=4
-    for prov in 北京 上海 广东 安徽 江苏; do
+    for prov in "${PROVINCE_ORDER[@]}"; do
       selected_province "$prov" || continue
       for isp in 电信 联通 移动; do
         current="IPv${family} ${prov}${isp}"
@@ -1732,7 +1835,7 @@ run_speedtests() {
             direct_status="$status"; direct_engine="$engine"
             result=$(run_speedtest_row 4 "$prov" "$isp")
             IFS='|' read -r retrans up down latency fallback_status fallback_engine <<< "$result"
-            if [ "$fallback_status" != "OK" ]; then
+            if [ "$fallback_status" != "OK" ] && [[ "$fallback_status" != 仅下载可用* ]]; then
               direct_short=$(compact_speed_status "$direct_status")
               fallback_short=$(compact_speed_status "$fallback_status")
               status="直连${direct_short}；${fallback_short}"
@@ -1743,7 +1846,10 @@ run_speedtests() {
         fi
         IFS='|' read -r retrans up down latency status engine <<< "$result"
         clear_progress
-        print_speed_result_row "$family" "$prov" "$isp" "$retrans" "$up" "$down" "$latency" "$status" "$engine"
+        if [ -n "$down" ] && [ "$down" != "-" ] && [ "$down" != "failed" ]; then
+          print_speed_result_row "$family" "$prov" "$isp" "$retrans" "$up" "$down" "$latency" "$status" "$engine"
+          displayed=$((displayed + 1))
+        fi
         completed=$((completed + 1))
         render_progress "单线程测速" "$completed" "$total" "完成 ${current}"
       done
@@ -1759,11 +1865,15 @@ run_speedtests() {
       IFS='|' read -r retrans up down latency status engine <<< "$result"
     fi
     clear_progress
-    print_speed_result_row 6 "最近" "端点" "$retrans" "$up" "$down" "$latency" "$status" "$engine"
+    if [ -n "$down" ] && [ "$down" != "-" ] && [ "$down" != "failed" ]; then
+      print_speed_result_row 6 "最近" "端点" "$retrans" "$up" "$down" "$latency" "$status" "$engine"
+      displayed=$((displayed + 1))
+    fi
     completed=$((completed + 1))
     render_progress "单线程测速" "$completed" "$total" "完成 ${current}"
   fi
   finish_progress "单线程测速" "$total" "全部完成"
+  echo -e "${DIM}主表保留 ${displayed} 项有效下载数据；其余候选仅记录于 endpoint-audit.csv。${NC}"
   echo
 }
 
@@ -1800,10 +1910,10 @@ self_test() {
   cdn6=$(awk -F '\t' '$1=="cdn"&&$2=="6"{n++}END{print n+0}' "$NODE_FILE")
   tos=$(awk -F '\t' '$1=="tos"&&$2=="4"{n++}END{print n+0}' "$NODE_FILE")
   plan=$(wc -l < "$PLAN_FILE" | tr -d ' ')
-  [ "$cdn4" -eq 15 ] && [ "$cdn6" -eq 15 ] && [ "$tos" -eq 9 ] && [ "$plan" -eq 30 ] || {
+  [ "$cdn4" -eq 30 ] && [ "$cdn6" -eq 30 ] && [ "$tos" -eq 9 ] && [ "$plan" -eq 60 ] || {
     echo "SELF-TEST FAIL: cdn4=$cdn4 cdn6=$cdn6 tos=$tos plan=$plan" >&2; exit 1;
   }
-  echo "SELF-TEST PASS: 15 IPv4 + 15 IPv6 TCP nodes, 9 IPv4 TOS endpoints."
+  echo "SELF-TEST PASS: 30 IPv4 + 30 IPv6 TCP nodes, 9 IPv4 TOS endpoints."
 }
 
 main() {
@@ -1848,7 +1958,7 @@ main() {
     run_speedtests
   fi
   write_summary
-  echo -e "${DIM}注：Zstatic 仅测五省 30 组 TCP 品质；吞吐另测五省 IPv4 15 组＋IPv6 最近端点 1 组，单线程不限制 Mbps。${NC}"
+  echo -e "${DIM}注：Zstatic 测十地区 60 组 TCP 品质；吞吐主表仅保留取得下载数据的项目，全部失败细节见 endpoint-audit.csv。${NC}"
   echo -e "${GREEN}结果已保存：$OUTPUT_DIR${NC}"
 }
 

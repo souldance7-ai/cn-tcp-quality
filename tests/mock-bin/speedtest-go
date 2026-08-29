@@ -5,7 +5,9 @@ fi
 if [ "${MOCK_DYNAMIC_FAIL:-0}" = "1" ] && [[ " $* " == *" --location="* ]]; then
   exit 1
 fi
-if [ "${MOCK_SPEEDTEST_BORDERLINE:-0}" = "1" ]; then
+if [ "${MOCK_SPEEDTEST_DOWNLOAD_ONLY:-0}" = "1" ]; then
+  printf '%s\n' '{"servers":[{"id":"mock-download-only","latency":50000000,"dl_speed":12500000,"ul_speed":12500}]}'
+elif [ "${MOCK_SPEEDTEST_BORDERLINE:-0}" = "1" ]; then
   printf '%s\n' '{"servers":[{"id":"mock-borderline","latency":50000000,"dl_speed":12500,"ul_speed":12500}]}'
 elif [ "${MOCK_SPEEDTEST_LOW:-0}" = "1" ]; then
   printf '%s\n' '{"servers":[{"id":"mock-low","latency":50000000,"dl_speed":1000,"ul_speed":1000}]}'
