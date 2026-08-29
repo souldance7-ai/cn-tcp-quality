@@ -1,4 +1,12 @@
 #!/usr/bin/env bash
+if [ "${MOCK_UNKNOWN_ROUTE:-0}" = "1" ]; then
+cat <<'EOF'
+traceroute to 198.51.100.20, 24 hops max
+ 1  192.0.2.1 [AS64510]  1.000 ms
+ 2  198.51.100.1 [AS64511]  20.000 ms
+EOF
+exit 0
+fi
 cat <<'EOF'
 traceroute to 198.51.100.20, 24 hops max
  1  192.0.2.1 [AS64500]  1.000 ms

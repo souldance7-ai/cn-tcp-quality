@@ -23,10 +23,12 @@ CN_TCP_PROGRESS=always PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 grep -q 'TCP 探测.*100%  60/60.*全部完成' "$TEST_TMP/dual-terminal.txt"
 
 MOCK_NO_IPV6=1 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
-  --count 5 --parallel 4 --no-color --output "$TEST_TMP/no-ipv6" >/dev/null
+  --count 5 --parallel 4 --no-color --output "$TEST_TMP/no-ipv6" > "$TEST_TMP/no-ipv6-terminal.txt"
 
 [ "$(grep -c '^IPv6,.*,跳过,' "$TEST_TMP/no-ipv6/tcp-quality.csv")" -eq 30 ]
 [ "$(grep -c '^IPv4,.*,正常,' "$TEST_TMP/no-ipv6/tcp-quality.csv")" -eq 30 ]
+grep -q 'IPv6：本机无可用路由，已隐藏 30 条跳过记录' "$TEST_TMP/no-ipv6-terminal.txt"
+[ "$(grep -c '^  IPv6[[:space:]]' "$TEST_TMP/no-ipv6-terminal.txt" || true)" -eq 0 ]
 
 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
   --province wh --count 3 --parallel 3 --no-color --output "$TEST_TMP/wuhan" >/dev/null
@@ -49,14 +51,14 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(awk -F, 'NR>1 && $11==60{n++}END{print n+0}' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
 [ "$(grep -c ',1.67,' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
-grep -q 'CN TCP.*Network Quality Benchmark (V1.14.0)' "$TEST_TMP/adaptive-terminal.txt"
+grep -q 'CN TCP.*Network Quality Benchmark (V1.14.1)' "$TEST_TMP/adaptive-terminal.txt"
 grep -q '██████╗.*███╗.*██╗' "$TEST_TMP/adaptive-terminal.txt"
 
 MOCK_UNKNOWN_ROUTE=1 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
   --province bj -4 --count 3 --parallel 3 --no-color --output "$TEST_TMP/unknown-route" >/dev/null
 
-[ "$(grep -c ',未确定（AS64510/AS64511）$' "$TEST_TMP/unknown-route/tcp-quality.csv")" -eq 3 ]
-[ "$(grep -c ',未确定（AS64510/AS64511）,AS64510+AS64511,' "$TEST_TMP/unknown-route/route-audit.csv")" -eq 3 ]
+[ "$(grep -c ',末段 AS64511$' "$TEST_TMP/unknown-route/tcp-quality.csv")" -eq 3 ]
+[ "$(grep -c ',末段 AS64511,AS64510+AS64511,' "$TEST_TMP/unknown-route/route-audit.csv")" -eq 3 ]
 
 CN_TCP_SPEEDTEST_BIN="$MOCK_BIN/speedtest-go" \
 CN_TCP_SPEEDTEST_SOURCE4="192.0.2.10" \

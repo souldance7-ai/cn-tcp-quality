@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.14.0"
+VERSION="1.14.1"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 SPEEDTEST_NET_CATALOG_URL="${CN_TCP_SPEEDTEST_NET_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.net-CN-ID/main/CN.csv}"
@@ -426,7 +426,8 @@ prepare_probe_plan() {
 ipv6_route_available() {
   local ip6
   ip6=$(awk -F '\t' '$3=="6" && $7!="-" {print $7; exit}' "$PLAN_FILE")
-  [ -n "$ip6" ] && ip -6 route get "$ip6" >/dev/null 2>&1
+  { [ -n "$ip6" ] && ip -6 route get "$ip6" >/dev/null 2>&1; } ||
+    ip -6 route show default 2>/dev/null | grep -q '^default'
 }
 
 calc_metrics() {
@@ -715,18 +716,18 @@ route_asn_path() {
   } | awk 'NF' > "$asn_file"
 }
 
-unknown_route_label() {
-  local asn_file="$1" summary
-  summary=$(awk '!seen[$0]++{print; if(++n==4) exit}' "$asn_file" 2>/dev/null | paste -sd/ -)
-  if [ -n "$summary" ]; then
-    printf '未确定（%s）' "$summary"
+last_route_asn_label() {
+  local asn_file="$1" last
+  last=$(awk 'NF{v=$0}END{print v}' "$asn_file" 2>/dev/null)
+  if [ -n "$last" ]; then
+    printf '末段 %s' "$last"
   else
-    printf '未确定（无ASN证据）'
+    printf '未定 无ASN'
   fi
 }
 
 classify_route_type() {
-  local isp="$1" asn_file="$2" n4809 n4134 n23764 n9929 n10099 n4837 n58807 n58453 n9808 unknown
+  local isp="$1" asn_file="$2" n4809 n4134 n23764 n9929 n10099 n4837 n58807 n58453 n9808 fallback
   n4809=$(grep -cx 'AS4809' "$asn_file" 2>/dev/null || true)
   n4134=$(grep -cx 'AS4134' "$asn_file" 2>/dev/null || true)
   n23764=$(grep -cx 'AS23764' "$asn_file" 2>/dev/null || true)
@@ -736,31 +737,31 @@ classify_route_type() {
   n58807=$(grep -cx 'AS58807' "$asn_file" 2>/dev/null || true)
   n58453=$(grep -cx 'AS58453' "$asn_file" 2>/dev/null || true)
   n9808=$(grep -cx 'AS9808' "$asn_file" 2>/dev/null || true)
-  unknown=$(unknown_route_label "$asn_file")
+  fallback=$(last_route_asn_label "$asn_file")
   case "$isp" in
     电信)
       if [ "$n4809" -gt 0 ] && [ "$n4134" -gt 0 ]; then printf 'CN2 GT'
       elif [ "$n4809" -ge 2 ]; then printf 'CN2 GIA'
-      elif [ "$n4809" -eq 1 ]; then printf 'CN2 AS4809（未细分）'
+      elif [ "$n4809" -eq 1 ]; then printf 'CN2 AS4809'
       elif [ "$n23764" -gt 0 ]; then printf 'CTGNet'
       elif [ "$n4134" -gt 0 ]; then printf '163'
-      else printf '%s' "$unknown"; fi
+      else printf '%s' "$fallback"; fi
       ;;
     联通)
-      if [ "$n9929" -gt 0 ] && [ "$n4837" -gt 0 ]; then printf '9929/4837混合'
+      if [ "$n9929" -gt 0 ] && [ "$n4837" -gt 0 ]; then printf '%s' "$fallback"
       elif [ "$n9929" -gt 0 ]; then printf '9929'
       elif [ "$n10099" -gt 0 ]; then printf 'CUG 10099'
       elif [ "$n4837" -gt 0 ]; then printf '4837'
-      else printf '%s' "$unknown"; fi
+      else printf '%s' "$fallback"; fi
       ;;
     移动)
-      if [ "$n58807" -gt 0 ] && { [ "$n58453" -gt 0 ] || [ "$n9808" -gt 0 ]; }; then printf 'CMIN2混合'
+      if [ "$n58807" -gt 0 ] && { [ "$n58453" -gt 0 ] || [ "$n9808" -gt 0 ]; }; then printf '%s' "$fallback"
       elif [ "$n58807" -gt 0 ]; then printf 'CMIN2'
       elif [ "$n58453" -gt 0 ]; then printf 'CMI'
       elif [ "$n9808" -gt 0 ]; then printf 'CMNET'
-      else printf '%s' "$unknown"; fi
+      else printf '%s' "$fallback"; fi
       ;;
-    *) printf '%s' "$unknown" ;;
+    *) printf '%s' "$fallback" ;;
   esac
 }
 
@@ -810,12 +811,12 @@ analyze_route_types() {
 }
 
 show_tcp_results() {
-  local file idx family prov isp loss avg jitter p95 min max received status host ipaddr sent lc ac line route_type evidence
+  local file idx family prov isp loss avg jitter p95 min max received status host ipaddr sent lc ac line route_type evidence skipped_ipv6=0
   TCP_CSV="$OUTPUT_DIR/tcp-quality.csv"
   printf '\xEF\xBB\xBF协议,省份,运营商,丢包率(%%),平均延迟(ms),抖动(ms),P95(ms),最低延迟(ms),最高延迟(ms),接收,发送,状态,域名,IP,路由型态\n' > "$TCP_CSV"
   echo -e "${BOLD}${CYAN}十地区三网 TCP 品质（双栈）${NC}"
   echo
-  printf '  '; pad_left 6 '协议'; printf '  '; pad_left 12 '地区线路'; printf '  '; pad_left 10 '丢包率'; printf '  '; pad_left 11 '平均延迟'; printf '  '; pad_left 9 '抖动'; printf '  '; pad_left 9 'P95'; printf '  '; pad_left 17 '最低／最高'; printf '  '; pad_left 23 '路由型态'; printf '  '; pad_left 8 '状态'; printf '\n'
+  printf '  '; pad_left 6 '协议'; printf '  '; pad_left 12 '地区线路'; printf '  '; pad_left 10 '丢包率'; printf '  '; pad_left 11 '平均延迟'; printf '  '; pad_left 9 '抖动'; printf '  '; pad_left 9 'P95'; printf '  '; pad_left 17 '最低／最高'; printf '  '; pad_left 15 '路由型态'; printf '  '; pad_left 8 '状态'; printf '\n'
   for file in "$RESULT_DIR"/*.tsv; do
     idx=$(basename "$file" .tsv)
     IFS=$'\t' read -r family prov isp loss avg jitter p95 min max received status host ipaddr sent < "$file"
@@ -825,6 +826,10 @@ show_tcp_results() {
     fi
     printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
       "IPv$family" "$prov" "$isp" "$loss" "$avg" "$jitter" "$p95" "$min" "$max" "$received" "$sent" "$status" "$host" "$ipaddr" "$route_type" >> "$TCP_CSV"
+    if [ "$family" = "6" ] && [ "$status" = "跳过" ]; then
+      skipped_ipv6=$((skipped_ipv6 + 1))
+      continue
+    fi
     lc=$(loss_color "$loss"); ac=$(latency_color "$avg")
     printf '  '; printf '%b' "$CYAN"; pad_left 6 "IPv$family"; printf '%b' "$NC"
     printf '  '; printf '%b' "$CYAN"; pad_left 12 "$prov$isp"; printf '%b' "$NC"
@@ -834,9 +839,12 @@ show_tcp_results() {
     printf '  '; printf '%b' "$ac"; pad_left 9 "$(metric_text "$p95" 'ms')"; printf '%b' "$NC"
     if [ "$min" = "-" ]; then line="-"; else line="${min}/${max}ms"; fi
     printf '  '; printf '%b' "$ac"; pad_left 17 "$line"; printf '%b' "$NC"
-    printf '  '; printf '%b' "$CYAN"; pad_left 23 "$route_type"; printf '%b' "$NC"
+    printf '  '; printf '%b' "$CYAN"; pad_left 15 "$route_type"; printf '%b' "$NC"
     printf '  '; [ "$status" = "正常" ] && printf '%b' "$GREEN" || printf '%b' "$YELLOW"; pad_left 8 "$status"; printf '%b\n' "$NC"
   done
+  if [ "$skipped_ipv6" -gt 0 ]; then
+    echo -e "${DIM}  IPv6：本机无可用路由，已隐藏 ${skipped_ipv6} 条跳过记录；CSV仍完整保留。${NC}"
+  fi
   echo
 }
 
@@ -2224,7 +2232,7 @@ main() {
     run_speedtests
   fi
   write_summary
-  echo -e "${DIM}注：Zstatic 测十地区 60 组 TCP 品质；未定型线路会附实际 ASN，完全无证据时明确标示。${NC}"
+  echo -e "${DIM}注：Zstatic 测十地区 60 组 TCP 品质；混合或未定型线路仅显示末段 ASN，完整路径见 route-audit.csv。${NC}"
   echo -e "${DIM}吞吐终端显示全部逐项尝试，主结果仅保留取得下载数据的项目；失败细节见 endpoint-audit.csv。${NC}"
   echo -e "${GREEN}结果已保存：$OUTPUT_DIR${NC}"
 }
