@@ -5,12 +5,19 @@ output=""
 is_upload=0
 has_follow=0
 user_agent=""
+content_length=""
 args=("$@")
 for ((i=0; i<${#args[@]}; i++)); do
   case "${args[$i]}" in
     -o) output="${args[$((i+1))]:-}" ;;
     -L|--location) has_follow=1 ;;
     -A|--user-agent) user_agent="${args[$((i+1))]:-}" ;;
+    -H|--header)
+      header="${args[$((i+1))]:-}"
+      case "$header" in
+        Content-Length:*) content_length="${header#Content-Length: }" ;;
+      esac
+      ;;
     --data-binary) is_upload=1 ;;
     http://*|https://*) url="${args[$i]}" ;;
   esac
@@ -23,11 +30,14 @@ if [ "${MOCK_HEFEI_STATIC:-0}" != "1" ]; then
 fi
 
 if [[ "$url" == *'speed.cloudflare.com/__down?'* ]]; then
+  requested=$(printf '%s' "$url" | sed -nE 's/.*[?&]bytes=([0-9]+).*/\1/p')
+  [ -n "$requested" ] && [ "$requested" -le 250000000 ] || exit 22
   printf '200|16777216|25000000|0.030|1.000|1'
   exit 0
 fi
 
 if [ "$is_upload" -eq 1 ] && [[ "$url" == *'speed.cloudflare.com/__up'* ]]; then
+  [ -n "$content_length" ] && [ "$content_length" -le 50000000 ] || exit 22
   printf '200|16777216|12500000|0.040|1.000|1'
   exit 0
 fi

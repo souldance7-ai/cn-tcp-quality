@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.10.0"
+VERSION="1.10.1"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 COUNT=30
@@ -980,9 +980,8 @@ direct_http_download() {
 direct_http_upload() {
   local family="$1" source="$2" host="$3" port="$4" ipaddr="$5" url="$6" work="$7" payload_mode="${8:-form}"
   local meta="$work.upload.meta" err="$work.upload.err" sslog="$work.upload.ss"
-  local resolve_ip="$ipaddr" pid monitor_pid rc=0 body_bytes
+  local resolve_ip="$ipaddr" pid monitor_pid rc=0 body_bytes="${9:-$SPEED_BYTES}"
   [ "$family" = "4" ] || resolve_ip="[$ipaddr]"
-  body_bytes="$SPEED_BYTES"
   (
     # curl 是测速结果的权威进程。测试端提早结束时，数据生成器可能收到
     # SIGPIPE；这里明确返回 curl 状态，避免把成功上传误判为失败。
@@ -1099,6 +1098,7 @@ parse_direct_http_metric() {
 
 run_nearest_ipv6_speed_row() {
   local host="speed.cloudflare.com" port="443" source="$SOURCE_IPV6" ipaddr work
+  local download_bytes="$SPEED_BYTES" upload_bytes="$SPEED_BYTES"
   local download_url upload_url drc dmeta dss down dlat dummy dstatus
   local urc umeta uss up ulat retrans ustatus failure status
   ipaddr=$(resolve_speedtest_host 6 "$host" 2>/dev/null || true)
@@ -1120,8 +1120,12 @@ run_nearest_ipv6_speed_row() {
     return
   fi
 
+  # Cloudflare 官方测速序列的单次请求上限分别为 250 MB 下载与 50 MB 上传。
+  # 这是端点接受的 payload 大小，不是 Mbps 限速；curl 仍按线路全速传输。
+  [ "$download_bytes" -le 250000000 ] || download_bytes=250000000
+  [ "$upload_bytes" -le 50000000 ] || upload_bytes=50000000
   work="$WORK_DIR/nearest-ipv6-cloudflare"
-  download_url="https://${host}/__down?bytes=${SPEED_BYTES}&measId=cn-tcp-${RANDOM}"
+  download_url="https://${host}/__down?bytes=${download_bytes}&measId=cn-tcp-${RANDOM}"
   upload_url="https://${host}/__up"
   IFS='|' read -r drc dmeta dss <<<"$(direct_http_download 6 "$source" "$host" "$port" "$ipaddr" "$download_url" "$work")"
   IFS='|' read -r down dlat dummy dstatus <<<"$(parse_direct_http_metric download "$drc" "$dmeta" "$dss")"
@@ -1134,7 +1138,7 @@ run_nearest_ipv6_speed_row() {
     return
   fi
 
-  IFS='|' read -r urc umeta uss <<<"$(direct_http_upload 6 "$source" "$host" "$port" "$ipaddr" "$upload_url" "$work" raw)"
+  IFS='|' read -r urc umeta uss <<<"$(direct_http_upload 6 "$source" "$host" "$port" "$ipaddr" "$upload_url" "$work" raw "$upload_bytes")"
   IFS='|' read -r up ulat retrans ustatus <<<"$(parse_direct_http_metric upload "$urc" "$umeta" "$uss")"
   if [ "$ustatus" != "OK" ]; then
     failure=$(direct_failure_detail "${urc:-1}" "${umeta:-/dev/null}" "$work.upload.err")
