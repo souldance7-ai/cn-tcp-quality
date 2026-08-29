@@ -6,7 +6,7 @@
 
 set -uo pipefail
 
-VERSION="1.14.1"
+VERSION="1.14.2"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 SPEEDTEST_NET_CATALOG_URL="${CN_TCP_SPEEDTEST_NET_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.net-CN-ID/main/CN.csv}"
@@ -45,12 +45,15 @@ HTTP_USER_AGENT="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 CN
 if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then
   RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'
   CYAN=$'\033[36m'; BOLD=$'\033[1m'; DIM=$'\033[2m'; NC=$'\033[0m'
+  LOSS_GREEN=$'\033[38;5;46m'; LOSS_YELLOW_GREEN=$'\033[38;5;154m'
+  LOSS_BRIGHT_YELLOW=$'\033[38;5;226m'; LOSS_BRIGHT_RED=$'\033[38;5;196m'
   GOLD_WHITE=$'\033[38;5;231m'; GOLD_LIGHT=$'\033[38;5;228m'
   GOLD_BRIGHT=$'\033[38;5;220m'; GOLD_AMBER=$'\033[38;5;214m'
   GOLD_WARM=$'\033[38;5;178m'; GOLD_DARK=$'\033[38;5;136m'
   GOLD_SHADOW=$'\033[38;5;94m'; TEXT_GRAY=$'\033[38;5;248m'
 else
   RED=""; GREEN=""; YELLOW=""; CYAN=""; BOLD=""; DIM=""; NC=""
+  LOSS_GREEN=""; LOSS_YELLOW_GREEN=""; LOSS_BRIGHT_YELLOW=""; LOSS_BRIGHT_RED=""
   GOLD_WHITE=""; GOLD_LIGHT=""; GOLD_BRIGHT=""; GOLD_AMBER=""
   GOLD_WARM=""; GOLD_DARK=""; GOLD_SHADOW=""; TEXT_GRAY=""
 fi
@@ -156,6 +159,7 @@ parse_args() {
   }
   [ "$NO_COLOR" -eq 0 ] || {
     RED=""; GREEN=""; YELLOW=""; CYAN=""; BOLD=""; DIM=""; NC=""
+    LOSS_GREEN=""; LOSS_YELLOW_GREEN=""; LOSS_BRIGHT_YELLOW=""; LOSS_BRIGHT_RED=""
     GOLD_WHITE=""; GOLD_LIGHT=""; GOLD_BRIGHT=""; GOLD_AMBER=""
     GOLD_WARM=""; GOLD_DARK=""; GOLD_SHADOW=""; TEXT_GRAY=""
   }
@@ -685,12 +689,23 @@ metric_text() {
   esac
 }
 
-loss_color() {
+loss_band() {
   local value="$1"
-  [ "$value" = "-" ] && { printf '%s' "$DIM"; return; }
-  awk -v v="$value" 'BEGIN{exit !(v==0)}' && { printf '%s' "$GREEN"; return; }
-  awk -v v="$value" 'BEGIN{exit !(v<=3)}' && { printf '%s' "$YELLOW"; return; }
-  printf '%s' "$RED"
+  [ "$value" = "-" ] && { printf 'dim'; return; }
+  awk -v v="$value" 'BEGIN{exit !(v<=10)}' && { printf 'green'; return; }
+  awk -v v="$value" 'BEGIN{exit !(v<=20)}' && { printf 'yellow-green'; return; }
+  awk -v v="$value" 'BEGIN{exit !(v<=30)}' && { printf 'yellow'; return; }
+  printf 'red'
+}
+
+loss_color() {
+  case "$(loss_band "$1")" in
+    green) printf '%s' "$LOSS_GREEN" ;;
+    yellow-green) printf '%s' "$LOSS_YELLOW_GREEN" ;;
+    yellow) printf '%s' "$LOSS_BRIGHT_YELLOW" ;;
+    red) printf '%s' "$LOSS_BRIGHT_RED" ;;
+    *) printf '%s' "$DIM" ;;
+  esac
 }
 
 latency_color() {
@@ -811,12 +826,14 @@ analyze_route_types() {
 }
 
 show_tcp_results() {
-  local file idx family prov isp loss avg jitter p95 min max received status host ipaddr sent lc ac line route_type evidence skipped_ipv6=0
+  local file idx family prov isp loss avg jitter p95 min max received status host ipaddr sent lc ac sc route_type evidence skipped_ipv6=0
   TCP_CSV="$OUTPUT_DIR/tcp-quality.csv"
   printf '\xEF\xBB\xBF协议,省份,运营商,丢包率(%%),平均延迟(ms),抖动(ms),P95(ms),最低延迟(ms),最高延迟(ms),接收,发送,状态,域名,IP,路由型态\n' > "$TCP_CSV"
   echo -e "${BOLD}${CYAN}十地区三网 TCP 品质（双栈）${NC}"
   echo
-  printf '  '; pad_left 6 '协议'; printf '  '; pad_left 12 '地区线路'; printf '  '; pad_left 10 '丢包率'; printf '  '; pad_left 11 '平均延迟'; printf '  '; pad_left 9 '抖动'; printf '  '; pad_left 9 'P95'; printf '  '; pad_left 17 '最低／最高'; printf '  '; pad_left 15 '路由型态'; printf '  '; pad_left 8 '状态'; printf '\n'
+  printf '  '; pad_left 6 '协议'; printf '  '; pad_left 12 '地区线路'; printf '  '; pad_left 10 '丢包率'; printf '  '; pad_left 11 '平均延迟'; printf '  '; pad_left 9 '抖动'; printf '  '; pad_left 9 'P95'; printf '  '; pad_left 9 '最低'; printf '  '; pad_left 9 '最高'; printf '  '; pad_left 15 '路由型态'; printf '  '; pad_left 8 '状态'; printf '\n'
+  printf '  %b丢包色阶：0–10%% 亮绿%b ｜ %b>10–20%% 黄绿%b ｜ %b>20–30%% 亮黄%b ｜ %b>30%% 亮红%b\n' \
+    "$LOSS_GREEN" "$NC" "$LOSS_YELLOW_GREEN" "$NC" "$LOSS_BRIGHT_YELLOW" "$NC" "$LOSS_BRIGHT_RED" "$NC"
   for file in "$RESULT_DIR"/*.tsv; do
     idx=$(basename "$file" .tsv)
     IFS=$'\t' read -r family prov isp loss avg jitter p95 min max received status host ipaddr sent < "$file"
@@ -830,17 +847,19 @@ show_tcp_results() {
       skipped_ipv6=$((skipped_ipv6 + 1))
       continue
     fi
-    lc=$(loss_color "$loss"); ac=$(latency_color "$avg")
+    lc=$(loss_color "$loss"); ac=$(latency_color "$avg"); sc="$YELLOW"
+    [ "$status" = "正常" ] && sc="$GREEN"
+    case "$status" in *丢包*) sc="$lc" ;; esac
     printf '  '; printf '%b' "$CYAN"; pad_left 6 "IPv$family"; printf '%b' "$NC"
     printf '  '; printf '%b' "$CYAN"; pad_left 12 "$prov$isp"; printf '%b' "$NC"
     printf '  '; printf '%b' "$lc"; pad_left 10 "$(metric_text "$loss" '%')"; printf '%b' "$NC"
     printf '  '; printf '%b' "$ac"; pad_left 11 "$(metric_text "$avg" 'ms')"; printf '%b' "$NC"
     printf '  '; printf '%b' "$ac"; pad_left 9 "$(metric_text "$jitter" 'ms')"; printf '%b' "$NC"
     printf '  '; printf '%b' "$ac"; pad_left 9 "$(metric_text "$p95" 'ms')"; printf '%b' "$NC"
-    if [ "$min" = "-" ]; then line="-"; else line="${min}/${max}ms"; fi
-    printf '  '; printf '%b' "$ac"; pad_left 17 "$line"; printf '%b' "$NC"
+    printf '  '; printf '%b' "$ac"; pad_left 9 "$(metric_text "$min" 'ms')"; printf '%b' "$NC"
+    printf '  '; printf '%b' "$ac"; pad_left 9 "$(metric_text "$max" 'ms')"; printf '%b' "$NC"
     printf '  '; printf '%b' "$CYAN"; pad_left 15 "$route_type"; printf '%b' "$NC"
-    printf '  '; [ "$status" = "正常" ] && printf '%b' "$GREEN" || printf '%b' "$YELLOW"; pad_left 8 "$status"; printf '%b\n' "$NC"
+    printf '  '; printf '%b' "$sc"; pad_left 8 "$status"; printf '%b\n' "$NC"
   done
   if [ "$skipped_ipv6" -gt 0 ]; then
     echo -e "${DIM}  IPv6：本机无可用路由，已隐藏 ${skipped_ipv6} 条跳过记录；CSV仍完整保留。${NC}"
@@ -2183,6 +2202,12 @@ self_test() {
   [ "$cdn4" -eq 30 ] && [ "$cdn6" -eq 30 ] && [ "$tos" -eq 9 ] && [ "$plan" -eq 60 ] || {
     echo "SELF-TEST FAIL: cdn4=$cdn4 cdn6=$cdn6 tos=$tos plan=$plan" >&2; exit 1;
   }
+  [ "$(loss_band 0)" = "green" ] && [ "$(loss_band 10)" = "green" ] &&
+    [ "$(loss_band 10.01)" = "yellow-green" ] && [ "$(loss_band 20)" = "yellow-green" ] &&
+    [ "$(loss_band 20.01)" = "yellow" ] && [ "$(loss_band 30)" = "yellow" ] &&
+    [ "$(loss_band 30.01)" = "red" ] || {
+      echo "SELF-TEST FAIL: loss color thresholds" >&2; exit 1;
+    }
   echo "SELF-TEST PASS: 30 IPv4 + 30 IPv6 TCP nodes, 9 IPv4 TOS endpoints."
 }
 

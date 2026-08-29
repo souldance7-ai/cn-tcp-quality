@@ -21,6 +21,8 @@ CN_TCP_PROGRESS=always PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 [ "$(grep -c ',4837$' "$TEST_TMP/dual/tcp-quality.csv")" -eq 20 ]
 [ "$(grep -c ',CMIN2$' "$TEST_TMP/dual/tcp-quality.csv")" -eq 20 ]
 grep -q 'TCP 探测.*100%  60/60.*全部完成' "$TEST_TMP/dual-terminal.txt"
+grep -q '丢包色阶：0–10% 亮绿.*>10–20% 黄绿.*>20–30% 亮黄.*>30% 亮红' "$TEST_TMP/dual-terminal.txt"
+grep -q '最低.*最高.*路由型态.*状态' "$TEST_TMP/dual-terminal.txt"
 
 MOCK_NO_IPV6=1 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
   --count 5 --parallel 4 --no-color --output "$TEST_TMP/no-ipv6" > "$TEST_TMP/no-ipv6-terminal.txt"
@@ -51,7 +53,7 @@ PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
 
 [ "$(awk -F, 'NR>1 && $11==60{n++}END{print n+0}' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
 [ "$(grep -c ',1.67,' "$TEST_TMP/adaptive/tcp-quality.csv")" -eq 3 ]
-grep -q 'CN TCP.*Network Quality Benchmark (V1.14.1)' "$TEST_TMP/adaptive-terminal.txt"
+grep -q 'CN TCP.*Network Quality Benchmark (V1.14.2)' "$TEST_TMP/adaptive-terminal.txt"
 grep -q '██████╗.*███╗.*██╗' "$TEST_TMP/adaptive-terminal.txt"
 
 MOCK_UNKNOWN_ROUTE=1 PATH="$MOCK_BIN:$PATH" "$ROOT/cn-tcp-quality.sh" \
