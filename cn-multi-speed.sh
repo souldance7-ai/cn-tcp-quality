@@ -7,7 +7,7 @@
 
 set -uo pipefail
 
-VERSION="multi-1.0.0"
+VERSION="multi-1.0.1"
 NODE_API="${CN_TCP_NODE_API:-https://tcpquality.ibsgss.uk/getNodes?format=tsv}"
 SPEEDTEST_CN_CATALOG_URL="${CN_TCP_SPEEDTEST_CN_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.cn-CN-ID/main/CN.csv}"
 SPEEDTEST_NET_CATALOG_URL="${CN_TCP_SPEEDTEST_NET_CATALOG_URL:-https://raw.githubusercontent.com/spiritLHLS/speedtest.net-CN-ID/main/CN.csv}"
@@ -68,7 +68,7 @@ CN TCP Quality V1
   bash cn-tcp-quality.sh [选项]
 
 选项：
-  --speed             追加十地区 IPv4 三网＋IPv6 最近端点8连接测速（流量较大）
+  --speed             追加十地区 IPv4 三网＋IPv6 最近端点多线程测速（流量较大）
   --speed-only        仅执行8连接测速，跳过 TCP 品质表
   --quick             快速模式：每节点 10 包，测速时间缩短（不限制 Mbps）
   -c, --count N       每个 TCP 节点发包数，默认 30，范围 3-100
@@ -196,7 +196,7 @@ show_banner() {
     "$GOLD_BRIGHT$BOLD" "$NC"
   printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n' \
     "$GOLD_BRIGHT" "$NC"
-  printf '%b• 隐私承诺：%b本地独立测速分析 · 绝不上报结果 · 绝不采集公网 IP%b\n' \
+  printf '%b• 隐私承诺：%b本地独立测速分析 · 报告保存在本机 · 不参与排行榜%b\n' \
     "$GOLD_LIGHT$BOLD" "$TEXT_GRAY" "$NC"
   printf '%b━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━%b\n\n' \
     "$GOLD_BRIGHT" "$NC"
@@ -959,11 +959,13 @@ single_curl_probe() {
   if [ "$direction" = "upload" ]; then
     key="upload/cn-tcp-quality-$(date +%s)-$RANDOM"
     (
+      set +o pipefail
       head -c "$SPEED_BYTES" /dev/zero 2>/dev/null | curl -4 --noproxy '*' --http1.1 -sS \
         --connect-timeout 5 --max-time "$SPEED_SECONDS" --resolve "$host:443:$ipaddr" \
-        -X PUT -H "Content-Length: $SPEED_BYTES" --upload-file - -o /dev/null \
+        -X PUT -H "Content-Length: $SPEED_BYTES" -H 'Transfer-Encoding:' -H 'Expect:' --upload-file - -o /dev/null \
         -w '%{http_code}|%{size_download}|%{speed_download}|%{size_upload}|%{speed_upload}|%{time_connect}|%{time_appconnect}|%{time_total}' \
         "https://$host/$key" > "$meta" 2> "$err"
+      exit "${PIPESTATUS[1]}"
     ) & pid=$!
   else
     curl -4 --noproxy '*' --http1.1 -sS \
@@ -1088,7 +1090,11 @@ speedtest_discovery_locations() {
 speedtest_http_candidates() {
   local prov="$1" isp="$2" file
   file=$(ensure_speedtest_catalog "$prov") || return 1
-  python3 - "$file" "$prov" "$isp" <<'PY'
+  filter_speedtest_metadata "$file" "$prov" "$isp"
+}
+
+filter_speedtest_metadata() {
+  python3 - "$1" "$2" "$3" <<'PY'
 import json, math, sys
 from urllib.parse import urlsplit
 
@@ -1111,7 +1117,7 @@ province_aliases = {
     "广东": ("guangdong", "guangzhou", "shenzhen", "foshan", "dongguan", "zhongshan", "zhuhai", "huizhou", "广东", "广州", "深圳"),
     "安徽": ("anhui", "hefei", "wuhu", "bengbu", "fuyang", "anqing", "huainan", "chuzhou", "huangshan", "ah163", ".ah.", "安徽", "合肥", "芜湖", "蚌埠", "阜阳", "安庆", "淮南", "滁州"),
     "江苏": ("jiangsu", "nanjing", "suzhou", "wuxi", "xuzhou", "nantong", "changzhou", "zhenjiang", "yangzhou", "lianyungang", "jsinfo", "jsqiuying", "江苏", "南京", "苏州", "无锡", "徐州", "南通"),
-    "武汉": ("hubei", "wuhan", "wuhan.net.cn", ".hb.", "湖北", "武汉"),
+    "武汉": ("wuhan", "武汉"),
     "浙江": ("zhejiang", "hangzhou", "ningbo", "wenzhou", "jiaxing", "shaoxing", "jinhua", "zjtelecom", ".zj.", "浙江", "杭州", "宁波", "温州"),
     "山东": ("shandong", "jinan", "qingdao", "yantai", "weifang", "linyi", ".sd.", "山东", "济南", "青岛", "烟台", "临沂"),
     "福建": ("fujian", "fuzhou", "xiamen", "quanzhou", "zhangzhou", ".fj.", "福建", "福州", "厦门", "泉州"),
@@ -1505,7 +1511,7 @@ single_direct_http_upload() {
         curl "-$family" --interface "$source" --noproxy '*' --http1.1 -k -sS -L \
           -A "$HTTP_USER_AGENT" \
           --connect-timeout 5 --max-time "$SPEED_SECONDS" --resolve "$host:$port:$resolve_ip" \
-          -X POST -H "Content-Length: $body_bytes" -H 'Expect:' "${browser_headers[@]}" \
+          -X POST -H "Content-Length: $body_bytes" -H 'Transfer-Encoding:' -H 'Content-Type: application/x-www-form-urlencoded' -H 'Expect:' "${browser_headers[@]}" \
           --upload-file - -o /dev/null \
           -w '%{http_code}|%{size_upload}|%{speed_upload}|%{time_connect}|%{time_total}|%{num_connects}' \
           "$url" > "$meta" 2> "$err"
@@ -1517,7 +1523,7 @@ single_direct_http_upload() {
       } | curl "-$family" --interface "$source" --noproxy '*' --http1.1 -k -sS -L \
           -A "$HTTP_USER_AGENT" \
           --connect-timeout 5 --max-time "$SPEED_SECONDS" --resolve "$host:$port:$resolve_ip" \
-          -X POST -H "Content-Length: $body_bytes" -H 'Content-Type: application/x-www-form-urlencoded' -H 'Expect:' "${browser_headers[@]}" \
+          -X POST -H "Content-Length: $body_bytes" -H 'Transfer-Encoding:' -H 'Content-Type: application/x-www-form-urlencoded' -H 'Expect:' "${browser_headers[@]}" \
           --upload-file - -o /dev/null \
           -w '%{http_code}|%{size_upload}|%{speed_upload}|%{time_connect}|%{time_total}|%{num_connects}' \
           "$url" > "$meta" 2> "$err"
@@ -1888,13 +1894,10 @@ discover_speedtest_sources() {
 }
 
 install_speedtest_engine() {
-  local machine arch asset base archive checksums expected actual extracted fallback
-  if [ -n "$SPEEDTEST_BIN" ] && [ -x "$SPEEDTEST_BIN" ]; then return 0; fi
+  local machine arch asset base archive checksums expected actual extracted
+  if [ "$SPEEDTEST_ENGINE" = go ] && [ -n "$SPEEDTEST_BIN" ] && [ -x "$SPEEDTEST_BIN" ]; then return 0; fi
   if command -v speedtest-go >/dev/null 2>&1; then
     SPEEDTEST_BIN=$(command -v speedtest-go); SPEEDTEST_ENGINE=go; return 0
-  fi
-  if command -v speedtest-cli >/dev/null 2>&1; then
-    SPEEDTEST_BIN=$(command -v speedtest-cli); SPEEDTEST_ENGINE=cli; return 0
   fi
   [ "$SPEEDTEST_INSTALL_TRIED" -eq 0 ] || return 1
   SPEEDTEST_INSTALL_TRIED=1
@@ -1930,16 +1933,7 @@ install_speedtest_engine() {
     fi
   fi
 
-  fallback="$WORK_DIR/speedtest-cli.py"
-  if command -v python3 >/dev/null 2>&1 &&
-     curl -fsSL --retry 3 --connect-timeout 10 --max-time 60 \
-       "https://raw.githubusercontent.com/sivel/speedtest-cli/master/speedtest.py" -o "$fallback" &&
-     grep -q 'Speedtest' "$fallback"; then
-    chmod +x "$fallback"
-    SPEEDTEST_BIN="$fallback"; SPEEDTEST_ENGINE=cli
-    return 0
-  fi
-  SPEEDTEST_INSTALL_ERROR="speedtest-go 与 speedtest-cli 均无法安装"
+  SPEEDTEST_INSTALL_ERROR="speedtest-go 安装失败；详见 core-install.log"
   return 1
 }
 
@@ -1968,41 +1962,47 @@ json_string() {
 }
 
 execute_speedtest_candidate() {
-  local family="$1" tag="$2" label="$3"
-  shift 3
+  local family="$1" tag="$2" label="$3" prov="$4" isp="$5"
+  shift 5
   local json="$WORK_DIR/speedtest-${family}-${tag}.json"
   local sslog="$WORK_DIR/speedtest-${family}-${tag}.ss"
+  local log_dir="$OUTPUT_DIR/core-logs"
+  mkdir -p "$log_dir"
+  local server_json="$log_dir/${family}-${tag}.json"
   local pid monitor_pid rc=0 dl up latency retrans endpoint_id metric_status="OK"
-  timeout 120 "$@" > "$json" 2>/dev/null & pid=$!
+  timeout 120 "$@" > "$json" 2> "$log_dir/${family}-${tag}.err" & pid=$!
   monitor_speedtest_pid "$pid" "$sslog" & monitor_pid=$!
   wait "$pid" || rc=$?
   wait "$monitor_pid" 2>/dev/null || true
   [ "$rc" -eq 0 ] || return 1
-  if [ "$SPEEDTEST_ENGINE" = "cli" ]; then
-    dl=$(json_number download "$json"); up=$(json_number upload "$json"); latency=$(json_number ping "$json")
-    [[ "$dl" =~ ^[-+0-9.eE]+$ ]] && [[ "$up" =~ ^[-+0-9.eE]+$ ]] || return 1
-    awk -v d="$dl" 'BEGIN{exit !(d>=150000)}' || return 3
-    dl=$(awk -v n="$dl" 'BEGIN{printf "%.1f",n/1000000}')
-    if awk -v u="$up" 'BEGIN{exit !(u>=150000)}'; then
-      up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n/1000000}')
-    else
-      up="-"; metric_status="仅下载可用：上传低于0.2Mbps"
-    fi
-    if [[ "$latency" =~ ^[-+0-9.eE]+$ ]]; then latency=$(awk -v n="$latency" 'BEGIN{printf "%.0f",n}'); else latency="-"; fi
-  else
-    dl=$(json_number dl_speed "$json"); up=$(json_number ul_speed "$json"); latency=$(json_number latency "$json")
-    [[ "$dl" =~ ^[-+0-9.eE]+$ ]] && [[ "$up" =~ ^[-+0-9.eE]+$ ]] || return 1
-    # speedtest-go 输出字节／秒；18750 B/s 为 0.15 Mbps，四舍五入后至少
-    # 显示 0.2 Mbps，避免把画面上的 0.1 Mbps 标成 OK。
-    awk -v d="$dl" 'BEGIN{exit !(d>=18750)}' || return 3
-    dl=$(awk -v n="$dl" 'BEGIN{printf "%.1f",n*8/1000000}')
-    if awk -v u="$up" 'BEGIN{exit !(u>=18750)}'; then
-      up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n*8/1000000}')
-    else
-      up="-"; metric_status="仅下载可用：上传低于0.2Mbps"
-    fi
-    if [[ "$latency" =~ ^[-+0-9.eE]+$ ]]; then latency=$(awk -v n="$latency" 'BEGIN{printf "%.0f",n/1000000}'); else latency="-"; fi
+  python3 - "$json" "$server_json" <<'CORE_JSON' || return 1
+import json, sys
+try:
+    result = json.load(open(sys.argv[1], encoding='utf-8'))
+    servers = result.get('servers', [])
+    if not isinstance(servers, list) or len(servers) != 1:
+        raise ValueError('Expected one selected server')
+    json.dump(servers, open(sys.argv[2], 'w', encoding='utf-8'), ensure_ascii=False)
+except (OSError, ValueError, TypeError, AttributeError):
+    raise SystemExit(1)
+CORE_JSON
+  if [ -z "$(filter_speedtest_metadata "$server_json" "$prov" "$isp")" ]; then
+    printf '%s\n' 'Rejected: server region/carrier metadata does not match the requested row.' >> "$log_dir/${family}-${tag}.err"
+    return 4
   fi
+  json="$server_json"
+  dl=$(json_number dl_speed "$json"); up=$(json_number ul_speed "$json"); latency=$(json_number latency "$json")
+  [[ "$dl" =~ ^[-+0-9.eE]+$ ]] && [[ "$up" =~ ^[-+0-9.eE]+$ ]] || return 1
+  # speedtest-go 输出字节／秒；18750 B/s 为 0.15 Mbps，四舍五入后至少
+  # 显示 0.2 Mbps，避免把画面上的 0.1 Mbps 标成 OK。
+  awk -v d="$dl" 'BEGIN{exit !(d>=18750)}' || return 3
+  dl=$(awk -v n="$dl" 'BEGIN{printf "%.1f",n*8/1000000}')
+  if awk -v u="$up" 'BEGIN{exit !(u>=18750)}'; then
+    up=$(awk -v n="$up" 'BEGIN{printf "%.1f",n*8/1000000}')
+  else
+    up="-"; metric_status="仅下载可用：上传低于0.2Mbps"
+  fi
+  if [[ "$latency" =~ ^[-+0-9.eE]+$ ]]; then latency=$(awk -v n="$latency" 'BEGIN{printf "%.0f",n/1000000}'); else latency="-"; fi
   endpoint_id=$(json_string id "$json" 2>/dev/null || true)
   [ -n "$endpoint_id" ] || endpoint_id=$(json_number id "$json" 2>/dev/null || true)
   if [ "$up" = "-" ]; then retrans="-"; else retrans=$(retrans_percent_from_ss "$sslog"); fi
@@ -2031,9 +2031,9 @@ run_speedtest_row() {
     location=$(speedtest_location "$prov" 2>/dev/null || true)
     keyword=$(speedtest_search_keyword "$isp" 2>/dev/null || true)
     if [ -n "$location" ] && [ -n "$keyword" ]; then
-      result=$(execute_speedtest_candidate "$family" "dynamic-${prov}-${isp}" "dynamic/go" \
+      result=$(execute_speedtest_candidate "$family" "dynamic-${prov}-${isp}" "dynamic/go-max8" "$prov" "$isp" \
         "$SPEEDTEST_BIN" --location="$location" --search="$keyword" --filter-cc=CN \
-        --source="$source" --thread=1 --json "${args[@]}")
+        --source="$source" --thread="$MULTI_THREADS" --protocol=http --ping-mode=http --json "${args[@]}")
       rc=$?
       if [ "$rc" -eq 0 ]; then
         if [[ "$result" == *'|仅下载可用：'* ]]; then success_note='成功(仅下载)'; else success_note='成功'; fi
@@ -2049,13 +2049,8 @@ run_speedtest_row() {
   ids=$(speedtest_server_ids "$prov" "$isp" 2>/dev/null || true)
   [ -n "$ids" ] || { printf '%s' '-|-|-|-|无候选端点|speedtest-go'; return; }
   for id in $ids; do
-    if [ "$SPEEDTEST_ENGINE" = "cli" ]; then
-      result=$(execute_speedtest_candidate "$family" "${prov}-${isp}-${id}" "static/cli" \
-        python3 "$SPEEDTEST_BIN" --server "$id" --source "$source" --single --secure --json)
-    else
-      result=$(execute_speedtest_candidate "$family" "${prov}-${isp}-${id}" "static/go" \
-        "$SPEEDTEST_BIN" --server="$id" --source="$source" --thread=1 --json "${args[@]}")
-    fi
+    result=$(execute_speedtest_candidate "$family" "${prov}-${isp}-${id}" "static/go-max8" "$prov" "$isp" \
+        "$SPEEDTEST_BIN" --server="$id" --source="$source" --thread="$MULTI_THREADS" --protocol=http --ping-mode=http --json "${args[@]}")
     rc=$?
     if [ "$rc" -eq 0 ]; then
       if [[ "$result" == *'|仅下载可用：'* ]]; then success_note='成功(仅下载)'; else success_note='成功'; fi
@@ -2114,7 +2109,7 @@ print_speed_result_row() {
 
 run_speedtests() {
   local family prov isp result retrans up down latency status engine current
-  local direct_status direct_engine fallback_status fallback_engine direct_short fallback_short
+  local direct_status direct_engine fallback_status fallback_engine direct_short fallback_short direct_result
   local completed=0 total displayed=0 attempted=0 hidden=0 persist last_group="" group
   SPEED_CSV="$OUTPUT_DIR/multi-thread-speed.csv"
   SPEED_AUDIT_CSV="$OUTPUT_DIR/endpoint-audit.csv"
@@ -2132,14 +2127,22 @@ run_speedtests() {
     total=$((total + 1))
   fi
   print_section_rule
-  echo -e "${BOLD}${CYAN}十地区 IPv4 三网＋IPv6 最近端点8连接测速${NC}"
-  echo -e "${DIM}后台逐项尝试；主表只显示取得真实下载数据的项目。同一端点并发8连接、不限制 Mbps。${NC}"
+  echo -e "${BOLD}${CYAN}十地区 IPv4 三网＋IPv6 最近端点多线程测速${NC}"
+  echo -e "${DIM}HTTP 同端点发起8连接；Speedtest 核心并发上限8，上传自适应。失败原因保存在结果目录。${NC}"
   if [ "$total" -eq 0 ]; then
     echo -e "${YELLOW}所选范围没有可执行的吞吐项目。${NC}"
     echo
     return
   fi
   discover_speedtest_sources
+  if [ -n "$SOURCE_IPV4" ] && { [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = 4 ]; }; then
+    render_progress "多线程测速" 0 "$total" "准备测速核心"
+    if ! install_speedtest_engine > "$OUTPUT_DIR/core-install.log" 2>&1; then
+      clear_progress
+      echo "Speedtest 备援不可用：$SPEEDTEST_INSTALL_ERROR；继续 HTTP 测速。"
+    fi
+    clear_progress
+  fi
   echo
   printf '  '; pad_left 5 '协议'; printf '  '; pad_left 10 '地区线路'; printf '  '; pad_left 10 '回程速度'; printf '  '; pad_left 10 '去程速度'; printf '  '; pad_left 11 '节点延迟'; printf '  '; pad_left 18 '状态'; printf '\n'
   if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "4" ]; then
@@ -2148,18 +2151,20 @@ run_speedtests() {
       for prov in "${SPEED_PROVINCE_ORDER[@]}"; do
         selected_province "$prov" || continue
         current="IPv${family} ${prov}${isp}"
-        render_progress "8连接测速" "$completed" "$total" "$current"
+        render_progress "多线程测速" "$completed" "$total" "$current"
         result=$(run_tos_speed_row "$prov" "$isp")
         IFS='|' read -r retrans up down latency status engine <<< "$result"
         [ "$status" = "OK" ] || result=""
         if [ -z "$result" ]; then
           result=$(run_direct_http_speed_row 4 "$prov" "$isp")
           IFS='|' read -r retrans up down latency status engine <<< "$result"
-          if [ "$status" != "OK" ] && [[ "$status" != 仅下载可用* ]]; then
-            direct_status="$status"; direct_engine="$engine"
+          if [ "$status" != "OK" ]; then
+            direct_status="$status"; direct_engine="$engine"; direct_result="$result"
             result=$(run_speedtest_row 4 "$prov" "$isp")
             IFS='|' read -r retrans up down latency fallback_status fallback_engine <<< "$result"
-            if [ "$fallback_status" != "OK" ] && [[ "$fallback_status" != 仅下载可用* ]]; then
+            if [ "$fallback_status" != "OK" ] && [[ "$direct_status" == 仅下载可用* ]]; then
+              result="$direct_result"
+            elif [ "$fallback_status" != "OK" ] && [[ "$fallback_status" != 仅下载可用* ]]; then
               direct_short=$(compact_speed_status "$direct_status")
               fallback_short=$(compact_speed_status "$fallback_status")
               status="直连${direct_short}；${fallback_short}"
@@ -2185,13 +2190,13 @@ run_speedtests() {
           hidden=$((hidden + 1))
         fi
         completed=$((completed + 1))
-        render_progress "8连接测速" "$completed" "$total" "完成 ${current}"
+        render_progress "多线程测速" "$completed" "$total" "完成 ${current}"
       done
     done
   fi
   if [ -z "$ONLY_FAMILY" ] || [ "$ONLY_FAMILY" = "6" ]; then
     current="IPv6 最近端点"
-    render_progress "8连接测速" "$completed" "$total" "$current"
+    render_progress "多线程测速" "$completed" "$total" "$current"
     if [ "$IPV6_OK" -ne 1 ]; then
       retrans='-'; up='-'; down='-'; latency='-'; status='本机无IPv6，跳过'; engine='-'
     else
@@ -2214,9 +2219,9 @@ run_speedtests() {
       hidden=$((hidden + 1))
     fi
     completed=$((completed + 1))
-    render_progress "8连接测速" "$completed" "$total" "完成 ${current}"
+    render_progress "多线程测速" "$completed" "$total" "完成 ${current}"
   fi
-  finish_progress "8连接测速" "$total" "全部完成"
+  finish_progress "多线程测速" "$total" "全部完成"
   echo -e "${DIM}共尝试 ${attempted} 项；主表显示 ${displayed} 项有效下载数据，隐藏 ${hidden} 项失败；明细见 endpoint-audit.csv。${NC}"
   print_section_rule
   echo
@@ -2283,7 +2288,7 @@ main() {
     if [ "$(id -u)" -eq 0 ]; then OUTPUT_DIR="/root/CN_MULTI_SPEED_$(date +%Y%m%d_%H%M%S)"; else OUTPUT_DIR="$PWD/CN_MULTI_SPEED_$(date +%Y%m%d_%H%M%S)"; fi
   fi
   mkdir -p "$OUTPUT_DIR"
-  printf '\xEF\xBB\xBF传输批次,方向,请求连接数,有效连接数,有效字节数,并发窗口秒数,合计Mbps,状态,说明\n' > "$OUTPUT_DIR/multi-connections.csv"
+  printf '\xEF\xBB\xBF传输批次,方向,请求连接数,有效连接数,有效字节数,并发窗口秒数,合计Mbps,状态,说明,端点\n' > "$OUTPUT_DIR/multi-connections.csv"
   WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/cn-tcp-quality.XXXXXX")
   RESULT_DIR="$WORK_DIR/results"; mkdir -p "$RESULT_DIR"
   ROUTE_DIR="$WORK_DIR/routes"; mkdir -p "$ROUTE_DIR"
@@ -2305,7 +2310,7 @@ main() {
   echo "测试范围：$SELECTED_PROVINCES"
   echo "IPv6 状态：$([ "$IPV6_OK" -eq 1 ] && echo 可用 || echo 无可用默认路由，将自动跳过)"
   if [ "$SPEED_ONLY" -eq 1 ]; then
-    echo "运行模式：仅8连接测速（已跳过 TCP 品质探测）"
+    echo "运行模式：仅多线程测速（HTTP 8连接；Speedtest 上限8；跳过 TCP 品质探测）"
   elif [ "$QUICK" -eq 0 ] && [ "$COUNT_EXPLICIT" -eq 0 ]; then
     echo "丢包采样：每节点 30 包；部分丢包自动补测至 60 包"
   else
@@ -2337,9 +2342,10 @@ MULTI_THREADS=8
 monitor_ss() { : > "$3"; }
 
 multi_transfer() {
-  local kind="$1" direction="$2" original="$3" group index pid
+  local kind="$1" direction="$2" original="$3" group index pid endpoint
   shift 3
   local -a params=("$@") workers=()
+  if [ "$kind" = tos ]; then endpoint="${params[1]}@${params[2]}"; else endpoint="${params[5]}"; fi
   group=$(mktemp -d "$WORK_DIR/multi.XXXXXX")
   python3 -c 'import time; print(time.monotonic())' > "$group/start"
   for ((index=0; index<MULTI_THREADS; index++)); do
@@ -2365,11 +2371,11 @@ multi_transfer() {
     ) & workers+=("$!")
   done
   for pid in "${workers[@]}"; do wait "$pid" || true; done
-  python3 - "$group" "$kind" "$direction" "$MULTI_THREADS" "$OUTPUT_DIR" <<'MULTI_PY'
+  python3 - "$group" "$kind" "$direction" "$MULTI_THREADS" "$OUTPUT_DIR" "$endpoint" <<'MULTI_PY'
 import csv, math, statistics, sys, time
 from pathlib import Path
 
-group, kind, direction, threads, output = sys.argv[1:]
+group, kind, direction, threads, output, endpoint = sys.argv[1:]
 group = Path(group)
 elapsed = max(time.monotonic() - float((group / 'start').read_text()), 0.001)
 good = []
@@ -2396,7 +2402,9 @@ for index in range(int(threads)):
         good.append((size, connect))
         unconfirmed |= no_response
     except (OSError, ValueError, IndexError) as exc:
-        errors.append(f'worker {index}: {exc}')
+        detail = group / f'worker-{index}.{direction}.err'
+        message = detail.read_text(errors='replace').strip()[:160] if detail.exists() else ''
+        errors.append(f'worker {index}: {exc}; {message}')
 
 size = int(sum(item[0] for item in good))
 rate = size / elapsed
@@ -2421,7 +2429,7 @@ audit = Path(output) / 'multi-connections.csv'
 with audit.open('a', encoding='utf-8', newline='') as file:
     csv.writer(file).writerow((group.name, direction, threads, len(good), size,
                               f'{elapsed:.6f}', f'{rate * 8 / 1e6:.3f}',
-                              'OK' if valid else 'FAIL', 'no-response' if unconfirmed else ''))
+                              'OK' if valid else 'FAIL', '; '.join((["no-response"] if unconfirmed else []) + errors), endpoint))
 print(f'{rc}|{meta}|{ss}', end='')
 MULTI_PY
 }
@@ -2430,19 +2438,16 @@ curl_probe() { multi_transfer tos "$1" single_curl_probe "$@"; }
 direct_http_download() { multi_transfer direct download single_direct_http_download "$@"; }
 direct_http_upload() { multi_transfer direct upload single_direct_http_upload "$@"; }
 
-# Core fallback must never turn a failed parallel test into a single-flow result.
-# Region/carrier selection stays with the three strictly filtered HTTP catalogs.
-run_speedtest_row() {
-  printf '%s' '-|-|-|-|多连接HTTP端点不可用|multi-http'
-}
 
 usage() {
   cat <<'HELP'
-CN TCP Quality — 十地区三网 8 连接测速
+CN TCP Quality — 十地区三网多线程测速（上限8连接）
 用法：bash cn-multi-speed.sh [--province bj/sh/gd/ah/js/wh/zj/sd/fj/gx] [-4|-6] [--quick] [--output DIR]
-默认仅测速，跳过 TCP 品质和 traceroute；逐个地区、运营商测试，每个方向同时发起 8 个 HTTP 连接。
-下载/上传 Mbps = 该方向有效连接的实际字节总量 × 8 ÷ 整个并发窗口秒数 ÷ 1000000。
-至少两个连接传输成功才保留该方向结果；成功连接数另存 multi-connections.csv。
+默认仅测速，跳过 TCP 品质和 traceroute；逐个地区、运营商测试，HTTP 每方向发起8连接。
+HTTP 失败或仅下载可用时，尝试同地区同运营商 Speedtest 核心（并发上限8，上传自适应）。
+HTTP 下载/上传 Mbps = 该方向有效连接的实际字节总量 × 8 ÷ 整个并发窗口秒数 ÷ 1000000。
+HTTP 至少两个连接传输成功才保留该方向结果；连接数与错误另存 multi-connections.csv。
+核心结果使用 speedtest-go 统计，端点身份与错误保存在 core-logs。
 IPv4 覆盖十地区三网；IPv6 仅测最近 Cloudflare 边缘。无匹配端点的项目保留失败审计。
 HELP
 }
